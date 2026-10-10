@@ -600,7 +600,11 @@ function servirStatique(res, fichier) {
 }
 
 const serveur = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  // Hors du try, une adresse illisible (en-tête Host malformé…) levait une
+  // exception non rattrapée qui arrêtait tout le serveur : on répond 400.
+  let url;
+  try { url = new URL(req.url, 'http://localhost'); }
+  catch { res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Requête invalide'); }
   const route = `${req.method} ${url.pathname}`;
 
   try {

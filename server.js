@@ -5,6 +5,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const db = require('./lib/db');
 const { parserMinimums, parserVentes, parserCollections, parserPhotos, candidatsScan } = require('./lib/parseurs');
 const { genererExportPropositions, genererExportCollections } = require('./lib/export');
@@ -12,6 +13,17 @@ const { genererExportPropositions, genererExportCollections } = require('./lib/e
 const PORT = process.env.PORT || 3000;
 const ADMIN_CODE = process.env.ADMIN_CODE || '';
 const MAX_UPLOAD = 30 * 1024 * 1024;
+
+// Porte du portail (voir « Porte du portail » plus bas). Sans FAMIMINMAX_SECRET,
+// /entrer répond 503 et rien d'autre ne change.
+const PORTAIL_SECRET = process.env.FAMIMINMAX_SECRET || '';
+// Secret DISTINCT pour nos propres cookies : une fuite du secret partagé avec le
+// portail ne doit pas suffire à fabriquer une session.
+const SESSION_SECRET = process.env.FAMIMINMAX_SESSION_SECRET || '';
+const SESSION_DUREE = 8 * 3600; // secondes, comme FamiPresta
+const FAMIPORTAIL_URL = (process.env.FAMIPORTAIL_URL || 'https://famiportail.famiformation.com').replace(/\/+$/, '');
+// Ids Famicard admis dans l'administration par le portail, sans le code (ex. « 4 »).
+const ADMINS_PORTAIL = new Set((process.env.FAMIMINMAX_ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean));
 
 // Seuils des alertes de fiabilité (surchargeables par variables d'environnement).
 const SEUILS = {
@@ -58,7 +70,78 @@ function lireCorps(req, limite = MAX_UPLOAD) {
 function estAdmin(req, url) {
   if (!ADMIN_CODE) return true; // pas de code configuré = accès libre (à éviter en prod)
   const code = req.headers['x-admin-code'] || url.searchParams.get('code') || '';
-  return code === ADMIN_CODE;
+  if (code === ADMIN_CODE) return true;
+  // Ou une session ouverte par le portail, pour un id listé dans FAMIMINMAX_ADMINS.
+  // Jamais depuis un autre site : /api/export est un GET qui change l'état, et le
+  // cookie (SameSite=Lax) suivrait un simple lien. Le code, lui, voyage en
+  // en-tête et n'a pas ce souci.
+  const site = req.headers['sec-fetch-site'];
+  if (site && site !== 'same-origin' && site !== 'none') return false;
+  const qui = lireSession(req);
+  return !!qui && ADMINS_PORTAIL.has(qui.id);
+}
+
+// --- Porte du portail -------------------------------------------------------
+// Famicard POSSÈDE la personne, Famiportail l'AUTHENTIFIE : ici on vérifie une
+// signature, rien d'autre (même contrat que FamiTask et FamiPresta). Le portail
+// signe « id|expiration|nom » avec FAMIMINMAX_SECRET et redirige vers /entrer ;
+// on échange ce laissez-passer d'une minute contre une session de huit heures,
+// signée avec NOTRE secret.
+//
+// ⚠️ CETTE PORTE S'AJOUTE, ELLE NE FERME RIEN. Sans session portail, la page
+// scan des Zebra (nom saisi sur l'appareil) et le code admin marchent comme avant.
+
+const signe = (charge, secret) => crypto.createHmac('sha256', secret).update(charge).digest('hex');
+
+// Vérifie un jeton « charge.signature » et rend { id, nom }, ou null. Même forme
+// pour le laissez-passer du portail et pour notre cookie : seuls le secret et la
+// durée changent. Un jeton abîmé est un refus, jamais une erreur 500.
+function ouvreJeton(jeton, secret) {
+  if (!secret) return null;
+  const t = String(jeton || '');
+  const i = t.lastIndexOf('.');
+  if (i < 1) return null;
+  const sig = t.slice(i + 1);
+  // Format vérifié AVANT la comparaison : timingSafeEqual lève sur deux tampons
+  // de longueurs différentes, et l'exception donnerait un 500.
+  if (!/^[0-9a-f]{64}$/.test(sig)) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(signe(t.slice(0, i), secret), 'hex'))) return null;
+  let brut;
+  try { brut = Buffer.from(t.slice(0, i), 'base64url').toString('utf8'); } catch { return null; }
+  const [id, exp, ...reste] = brut.split('|');
+  if (!/^\d+$/.test(id || '') || !/^\d+$/.test(exp || '')) return null;
+  if (Number(exp) * 1000 < Date.now()) return null; // périmé
+  return { id, nom: reste.join('|').trim() }; // le nom est « tout le reste » : il peut contenir un « | »
+}
+
+// Derrière le proxy https de Railway : le cookie part avec « Secure ».
+const enHttps = (req) => String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+
+// Pose la session : même forme de jeton, notre secret, huit heures.
+function poseSession(req, res, qui) {
+  const exp = Math.floor(Date.now() / 1000) + SESSION_DUREE;
+  const charge = Buffer.from([qui.id, exp, qui.nom].join('|'), 'utf8').toString('base64url');
+  res.setHeader('Set-Cookie', `fmm=${charge}.${signe(charge, SESSION_SECRET)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DUREE}` +
+    (enHttps(req) ? '; Secure' : ''));
+}
+
+// Qui est arrivé par le portail, ou null : Zebra en libre-service, session
+// expirée ou cookie abîmé, c'est le comportement d'avant.
+function lireSession(req) {
+  const trouve = /(?:^|;\s*)fmm=([^;\s]+)/.exec(String(req.headers.cookie || ''));
+  if (!trouve) return null;
+  try { return ouvreJeton(decodeURIComponent(trouve[1]), SESSION_SECRET); } catch { return null; }
+}
+
+// Traçabilité : l'id Famicard de qui a signé (NULL pour un nom saisi sur un
+// Zebra). Écrit à part, APRÈS la proposition : si la colonne manquait, la
+// proposition est déjà enregistrée et rien ne casse.
+async function noterAuteurId(table, codeArticle, qui) {
+  try {
+    await db.requete(`UPDATE ${table} SET auteur_central_id = $1 WHERE code_article = $2`, [qui ? qui.id : null, codeArticle]);
+  } catch (e) {
+    console.error(`[portail] auteur_central_id non noté (${table}) :`, e.message);
+  }
 }
 
 // Famille obligatoire sur les imports (« Noël », « Automne »…) : chaque fichier
@@ -195,7 +278,10 @@ async function apiProposer(req, res) {
   }
 
   const commentaire = String(corps.commentaire || '').trim().slice(0, 500) || null;
-  const auteur = String(corps.auteur || '').trim().slice(0, 80);
+  // Arrivé par le portail : le nom vient du laissez-passer signé, pas du
+  // navigateur. Sinon (Zebra en libre-service) : le nom saisi, comme avant.
+  const qui = lireSession(req);
+  const auteur = qui ? qui.nom.slice(0, 80) : String(corps.auteur || '').trim().slice(0, 80);
   if (!auteur) return json(res, 400, { erreur: 'Indiquez votre nom pour envoyer la proposition.' });
 
   // Une seule proposition par produit : la dernière écrase la précédente.
@@ -210,6 +296,7 @@ async function apiProposer(req, res) {
        maj_le = now(), exporte_le = NULL`,
     [codeArticle, p.ean, p.description, p.stock_min, minPropose, commentaire, auteur]
   );
+  await noterAuteurId('propositions', codeArticle, qui);
   json(res, 200, { ok: true });
 }
 
@@ -235,7 +322,8 @@ async function apiProposerCollection(req, res) {
   }
   const actuelle = await db.requete('SELECT collection FROM collections_articles WHERE code_article = $1', [codeArticle]);
 
-  const auteur = String(corps.auteur || '').trim().slice(0, 80);
+  const qui = lireSession(req); // même règle que pour le minimum
+  const auteur = qui ? qui.nom.slice(0, 80) : String(corps.auteur || '').trim().slice(0, 80);
   if (!auteur) return json(res, 400, { erreur: 'Indiquez votre nom pour envoyer la proposition.' });
   await db.requete(
     `INSERT INTO propositions_collection (code_article, ean, description, collection_actuelle, collection_proposee, auteur, statut)
@@ -247,6 +335,7 @@ async function apiProposerCollection(req, res) {
        maj_le = now(), exporte_le = NULL`,
     [codeArticle, p.ean, p.description, actuelle.rows.length ? actuelle.rows[0].collection : null, collectionProposee, auteur]
   );
+  await noterAuteurId('propositions_collection', codeArticle, qui);
   json(res, 200, { ok: true });
 }
 
@@ -608,6 +697,41 @@ const serveur = http.createServer(async (req, res) => {
   const route = `${req.method} ${url.pathname}`;
 
   try {
+    // --- Porte du portail : l'entrée et la sortie ---
+    // Un laissez-passer périmé, mal signé ou fabriqué ne dit pas lequel des
+    // trois : retour à la page scan avec un motif, elle propose de repasser par
+    // Famiportail.
+    if (url.pathname === '/entrer') {
+      if (!PORTAIL_SECRET || !SESSION_SECRET) {
+        // Sans secret, on ne signe rien : un message clair plutôt qu'un refus
+        // que personne ne saurait expliquer.
+        res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(`Famiminmax n'est pas encore relié au portail : ${PORTAIL_SECRET ? 'FAMIMINMAX_SESSION_SECRET' : 'FAMIMINMAX_SECRET'} manque sur ce service.`);
+      }
+      const venu = ouvreJeton(url.searchParams.get('j'), PORTAIL_SECRET);
+      if (!venu) {
+        res.writeHead(302, { Location: '/?acces=refuse', 'Cache-Control': 'no-store' });
+        return res.end();
+      }
+      // Une fiche Famicard sans prénom ni nom bloquerait les propositions (nom
+      // obligatoire) : on signe alors avec l'id.
+      const nom = venu.nom.slice(0, 80) || `Famicard n° ${venu.id}`;
+      poseSession(req, res, { id: venu.id, nom });
+      const versAdmin = url.searchParams.get('vers') === 'admin' && ADMINS_PORTAIL.has(venu.id);
+      res.writeHead(302, { Location: versAdmin ? '/admin' : '/', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    // « Changer d'utilisateur » sur un Zebra partagé : la session portail se
+    // ferme, la page scan revient à l'identification sur l'appareil.
+    if (url.pathname === '/sortir') {
+      res.writeHead(302, {
+        'Set-Cookie': 'fmm=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0' + (enHttps(req) ? '; Secure' : ''),
+        Location: '/',
+        'Cache-Control': 'no-store',
+      });
+      return res.end();
+    }
+
     if (url.pathname.startsWith('/api/')) {
       const ADMIN_ROUTES = ['/api/propositions', '/api/proposition-suppr', '/api/proposition-decision',
         '/api/import/minimums', '/api/import/ventes', '/api/import/collections',
@@ -621,6 +745,13 @@ const serveur = http.createServer(async (req, res) => {
           ok: true,
           version: (process.env.RAILWAY_GIT_COMMIT_SHA || 'dev').slice(0, 7),
         });
+      }
+      // Qui est arrivé par le portail (public : sans session, { portail: false }).
+      if (route === 'GET /api/moi') {
+        const qui = lireSession(req);
+        return json(res, 200, qui
+          ? { portail: true, nom: qui.nom, centralId: Number(qui.id), portailUrl: FAMIPORTAIL_URL }
+          : { portail: false });
       }
       if (route === 'GET /api/produit') return await apiProduit(req, res, url);
       if (route === 'POST /api/proposition') return await apiProposer(req, res);
@@ -662,6 +793,8 @@ async function demarrer() {
   serveur.listen(PORT, () => {
     console.log(`Famiminmax en écoute sur le port ${PORT}`);
     if (!ADMIN_CODE) console.warn('⚠ ADMIN_CODE non défini : les pages admin sont accessibles sans code.');
+    if (PORTAIL_SECRET && !SESSION_SECRET) console.warn('⚠ FAMIMINMAX_SESSION_SECRET manque : /entrer répond 503.');
+    if (PORTAIL_SECRET && PORTAIL_SECRET === SESSION_SECRET) console.warn('⚠ FAMIMINMAX_SESSION_SECRET doit différer de FAMIMINMAX_SECRET.');
   });
 }
 

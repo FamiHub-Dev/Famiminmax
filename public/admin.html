@@ -72,6 +72,7 @@
 </head>
 <body>
 <header>
+  <a id="lienPortail" href="https://famiportail.famiformation.com" style="margin-left:0" hidden>← Famiportail</a>
   <h1>Famiminmax</h1>
   <span class="sous">Administration</span>
   <a href="/">→ page scan</a>
@@ -597,6 +598,14 @@ async function exporter(type, mode) {
 document.getElementById('btnExportMin').addEventListener('click', () => exporter('min', 'validees'));
 document.getElementById('btnExportColl').addEventListener('click', () => exporter('collection', 'validees'));
 document.getElementById('btnExportMinToutes').addEventListener('click', () => exporter('min', 'toutes'));
+
+// Arrivé par Famiportail : lien de retour (caché sinon, rien ne change).
+fetch('/api/moi').then((r) => r.json()).then((moi) => {
+  if (!moi || !moi.portail) return;
+  const lien = document.getElementById('lienPortail');
+  if (moi.portailUrl) lien.href = moi.portailUrl;
+  lien.hidden = false;
+}).catch(() => {});
 
 demarrer();
 </script>

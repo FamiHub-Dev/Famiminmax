@@ -27,6 +27,7 @@
   header .sous{font-size:12px;color:#cfe6a0;font-weight:500}
   #chipUser{margin-left:auto;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
     background:#1a4a2c;color:#cfe6a0;border:1.5px solid var(--lichtgroen);border-radius:99px;padding:5px 12px}
+  #lienPortail{color:#cfe6a0;font-size:12.5px;font-weight:600;text-decoration:none;white-space:nowrap}
   main{max-width:560px;margin:0 auto;padding:12px 12px 90px}
 
   /* Zone scan */
@@ -142,6 +143,7 @@
 </head>
 <body>
 <header>
+  <a id="lienPortail" href="https://famiportail.famiformation.com" hidden>← Famiportail</a>
   <h1>Famiminmax</h1>
   <span class="sous">Minimums rayon</span>
   <button type="button" id="chipUser" hidden>👤 —</button>
@@ -466,16 +468,42 @@ document.getElementById('fermerColl').addEventListener('click', () => {
 const SESSION_MS = 30 * 60 * 1000; // 30 min glissantes
 let listeCollegues = [];
 async function chargerCollegues() {
+  const moi = chargerMoi(); // en parallèle de la liste
   try {
     const rep = await fetch('/api/collegues');
     listeCollegues = (await rep.json()).collegues || [];
   } catch {
     listeCollegues = [];
   }
+  await moi;
   majChip();
   if (!utilisateurActuel()) identite(); // première page : on s'identifie avant le reste
 }
+
+// Arrivé par Famiportail (/entrer) : le serveur connaît déjà le nom, signé par
+// le portail. Pas de page nom, et c'est ce nom-là qui signe les propositions.
+// Sans session portail (Zebra en libre-service), RIEN ne change.
+let identitePortail = null;
+async function chargerMoi() {
+  try {
+    const moi = await (await fetch('/api/moi')).json();
+    if (!moi || !moi.portail || !moi.nom) return;
+    identitePortail = moi.nom;
+    const lien = document.getElementById('lienPortail');
+    if (moi.portailUrl) lien.href = moi.portailUrl;
+    lien.hidden = false;
+    document.querySelector('header .sous').hidden = true; // la place du lien sur l'écran du TC26
+  } catch { /* réseau, ancien serveur : identification sur l'appareil, comme avant */ }
+}
+// Laissez-passer refusé par /entrer (périmé, ou lien rouvert depuis l'historique)
+if (new URLSearchParams(location.search).get('acces') === 'refuse') {
+  zone.innerHTML = '<p class="msg err">Lien du portail expiré ou invalide : repassez par Famiportail.</p>';
+  toast('Lien du portail expiré : repassez par Famiportail.', true); // visible même sous la page nom
+  try { history.replaceState(null, '', '/'); } catch { /* l'adresse garde ?acces=refuse, sans gravité */ }
+}
+
 function utilisateurActuel() {
+  if (identitePortail) return identitePortail; // passe avant la liste des collègues
   try {
     const s = JSON.parse(localStorage.getItem('famiminmax_session') || 'null');
     if (s && s.nom && s.expire > Date.now() &&
@@ -488,6 +516,9 @@ function ouvrirSession(nom) {
   majChip();
 }
 function prolongerSession() {
+  // Jamais le nom du portail dans la session de l'appareil : après « Changer
+  // d'utilisateur », le collègue suivant signerait au nom du précédent.
+  if (identitePortail) return;
   const n = utilisateurActuel();
   if (n) ouvrirSession(n);
 }
@@ -523,7 +554,17 @@ document.getElementById('champNom').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') document.getElementById('validerNom').click();
 });
 
+let chipArme = null;
 document.getElementById('chipUser').addEventListener('click', () => {
+  if (identitePortail) {
+    // Session portail : « Changer d'utilisateur » la ferme (/sortir). Deux
+    // touchers, sans boîte de dialogue (souvent bloquée en kiosque).
+    if (chipArme) { location.href = '/sortir'; return; }
+    document.getElementById('chipUser').textContent = '↻ Changer d’utilisateur ?';
+    chipArme = setTimeout(() => { chipArme = null; majChip(); }, 4000);
+    refocus();
+    return;
+  }
   if (listeCollegues.length) {
     ouvrirPicker(listeCollegues, 'Votre nom…', (nom) => { ouvrirSession(nom); refocus(); });
   } else {

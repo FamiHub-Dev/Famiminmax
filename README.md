@@ -78,6 +78,25 @@ automatiquement l'EAN-13 à zéro de tête.
 
 Le schéma de base se crée tout seul au démarrage, aucune migration à lancer.
 
+## Connexion par Famiportail (s'ajoute, ne remplace rien)
+
+La tuile du portail signe un laissez-passer d'une minute (`id|expiration|nom`, HMAC-SHA256,
+même contrat que FamiTask et FamiPresta) et redirige vers `/entrer?j=…`. Famiminmax le vérifie
+et ouvre une session de 8 h (cookie `fmm`). Avec cette session : nom affiché sans saisie, il
+signe les propositions (`auteur` + `auteur_central_id`), bouton « Changer d'utilisateur »
+(`/sortir`), lien « ← Famiportail ». **Sans** session, rien ne change : page scan ouverte et nom
+saisi sur le Zebra, code admin.
+
+| Variable | Rôle |
+|---|---|
+| `FAMIMINMAX_SECRET` | secret partagé avec Famiportail (même valeur des deux côtés). Absent : `/entrer` répond 503. |
+| `FAMIMINMAX_SESSION_SECRET` | signe les cookies de session ; **différent** du précédent. Absent : `/entrer` répond 503. |
+| `FAMIMINMAX_ADMINS` | ids Famicard (séparés par des virgules) admis sur `/admin` sans code. `ADMIN_CODE` reste valable. |
+| `FAMIPORTAIL_URL` | facultatif, cible du lien de retour (défaut `https://famiportail.famiformation.com`). |
+
+`railway.json` ne règle que le contrôle de santé (`/api/sante`, qui ne touche pas la base) :
+une version qui ne démarre pas ne remplace jamais celle qui tourne.
+
 ## Développement
 
 ```bash

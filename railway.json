@@ -1,0 +1,6 @@
+{
+  "deploy": {
+    "healthcheckPath": "/api/sante",
+    "healthcheckTimeout": 60
+  }
+}

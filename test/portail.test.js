@@ -119,9 +119,12 @@ test('jeton du portail valide : session posée, retour à la page scan', async (
   assert.match(c, /Path=\//);
   assert.match(c, /Max-Age=28800/);
   assert.doesNotMatch(c, /Secure/); // http en local
-  assert.deepStrictEqual(await moi(cookieDe(rep)), {
+  const { resteMs, ...reste } = await moi(cookieDe(rep));
+  assert.deepStrictEqual(reste, {
     portail: true, nom: 'Jimmy Hendrickx', centralId: 4, portailUrl: 'https://portail.exemple.test',
   });
+  // Durée restante de la session (8 h), pour que la page oublie le nom ensuite
+  assert.ok(resteMs > 8 * 3600 * 1000 - 60000 && resteMs <= 8 * 3600 * 1000, String(resteMs));
 });
 
 test('derrière le proxy https de Railway : cookie Secure', async () => {
@@ -218,6 +221,36 @@ test('proposition avec session portail : le nom vient du jeton, pas du navigateu
   // Zebra sans nom : toujours refusé, comme avant
   rep = await proposer(null, { codeArticle: '57913', minPropose: 120 });
   assert.strictEqual(rep.status, 400);
+});
+
+test('deux propositions qui se croisent : l’id Famicard ne passe pas sur la ligne de l’autre', async () => {
+  const cookie = cookieDe(await entrer(jeton(4, 'Jimmy', 'Hendrickx')));
+  // On retient l'UPDATE de Jimmy jusqu'à ce que Kim (Zebra) ait écrasé la
+  // proposition : c'est l'ordre défavorable, rare mais possible en magasin.
+  const pool = db.getPool();
+  let lacher;
+  const retenu = new Promise((ok) => { lacher = ok; });
+  db.setPool({
+    connect: (...a) => pool.connect(...a),
+    query: async (texte, params) => {
+      if (/SET auteur_central_id/.test(texte) && params && String(params[0]) === '4') await retenu;
+      return pool.query(texte, params);
+    },
+  });
+  try {
+    const jimmy = proposer(cookie, { codeArticle: '57913', minPropose: 60 });
+    await new Promise((ok) => setTimeout(ok, 100)); // l'INSERT de Jimmy est passé
+    const kim = await proposer(null, { codeArticle: '57913', minPropose: 72, auteur: 'Kim' });
+    assert.strictEqual(kim.status, 200, kim.texte);
+    lacher();
+    assert.strictEqual((await jimmy).status, 200);
+  } finally {
+    db.setPool(pool);
+  }
+  const { rows } = await db.requete("SELECT auteur, min_propose, auteur_central_id FROM propositions WHERE code_article = '57913'");
+  assert.strictEqual(rows[0].auteur, 'Kim');
+  assert.strictEqual(rows[0].min_propose, 72);
+  assert.strictEqual(rows[0].auteur_central_id, null); // et pas 4
 });
 
 test('proposition de collection avec session portail : même règle', async () => {

@@ -484,11 +484,13 @@ async function chargerCollegues() {
 // le portail. Pas de page nom, et c'est ce nom-là qui signe les propositions.
 // Sans session portail (Zebra en libre-service), RIEN ne change.
 let identitePortail = null;
+let finPortail = 0; // heure de CET appareil : le serveur donne la durée restante
 async function chargerMoi() {
   try {
     const moi = await (await fetch('/api/moi')).json();
     if (!moi || !moi.portail || !moi.nom) return;
     identitePortail = moi.nom;
+    finPortail = Date.now() + (Number(moi.resteMs) || 0);
     const lien = document.getElementById('lienPortail');
     if (moi.portailUrl) lien.href = moi.portailUrl;
     lien.hidden = false;
@@ -503,6 +505,9 @@ if (new URLSearchParams(location.search).get('acces') === 'refuse') {
 }
 
 function utilisateurActuel() {
+  // Session portail échue (8 h) sur une page restée ouverte, comme sur un Zebra
+  // en kiosque : on oublie le nom, retour à l'identification sur l'appareil.
+  if (identitePortail && Date.now() >= finPortail) identitePortail = null;
   if (identitePortail) return identitePortail; // passe avant la liste des collègues
   try {
     const s = JSON.parse(localStorage.getItem('famiminmax_session') || 'null');

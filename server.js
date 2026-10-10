@@ -93,7 +93,7 @@ function estAdmin(req, url) {
 
 const signe = (charge, secret) => crypto.createHmac('sha256', secret).update(charge).digest('hex');
 
-// Vérifie un jeton « charge.signature » et rend { id, nom }, ou null. Même forme
+// Vérifie un jeton « charge.signature » et rend { id, nom, exp }, ou null. Même forme
 // pour le laissez-passer du portail et pour notre cookie : seuls le secret et la
 // durée changent. Un jeton abîmé est un refus, jamais une erreur 500.
 function ouvreJeton(jeton, secret) {
@@ -111,7 +111,7 @@ function ouvreJeton(jeton, secret) {
   const [id, exp, ...reste] = brut.split('|');
   if (!/^\d+$/.test(id || '') || !/^\d+$/.test(exp || '')) return null;
   if (Number(exp) * 1000 < Date.now()) return null; // périmé
-  return { id, nom: reste.join('|').trim() }; // le nom est « tout le reste » : il peut contenir un « | »
+  return { id, nom: reste.join('|').trim(), exp: Number(exp) }; // le nom est « tout le reste » : il peut contenir un « | »
 }
 
 // Derrière le proxy https de Railway : le cookie part avec « Secure ».
@@ -135,10 +135,13 @@ function lireSession(req) {
 
 // Traçabilité : l'id Famicard de qui a signé (NULL pour un nom saisi sur un
 // Zebra). Écrit à part, APRÈS la proposition : si la colonne manquait, la
-// proposition est déjà enregistrée et rien ne casse.
-async function noterAuteurId(table, codeArticle, qui) {
+// proposition est déjà enregistrée et rien ne casse. « AND auteur » : si un
+// collègue a écrasé la même proposition entre-temps, on ne lui colle pas l'id
+// de l'autre.
+async function noterAuteurId(table, codeArticle, auteur, qui) {
   try {
-    await db.requete(`UPDATE ${table} SET auteur_central_id = $1 WHERE code_article = $2`, [qui ? qui.id : null, codeArticle]);
+    await db.requete(`UPDATE ${table} SET auteur_central_id = $1 WHERE code_article = $2 AND auteur = $3`,
+      [qui ? qui.id : null, codeArticle, auteur]);
   } catch (e) {
     console.error(`[portail] auteur_central_id non noté (${table}) :`, e.message);
   }
@@ -296,7 +299,7 @@ async function apiProposer(req, res) {
        maj_le = now(), exporte_le = NULL`,
     [codeArticle, p.ean, p.description, p.stock_min, minPropose, commentaire, auteur]
   );
-  await noterAuteurId('propositions', codeArticle, qui);
+  await noterAuteurId('propositions', codeArticle, auteur, qui);
   json(res, 200, { ok: true });
 }
 
@@ -335,7 +338,7 @@ async function apiProposerCollection(req, res) {
        maj_le = now(), exporte_le = NULL`,
     [codeArticle, p.ean, p.description, actuelle.rows.length ? actuelle.rows[0].collection : null, collectionProposee, auteur]
   );
-  await noterAuteurId('propositions_collection', codeArticle, qui);
+  await noterAuteurId('propositions_collection', codeArticle, auteur, qui);
   json(res, 200, { ok: true });
 }
 
@@ -747,10 +750,13 @@ const serveur = http.createServer(async (req, res) => {
         });
       }
       // Qui est arrivé par le portail (public : sans session, { portail: false }).
+      // resteMs : la durée qui reste, pas l'heure de fin (l'horloge d'un Zebra
+      // peut être fausse) ; la page oublie le nom une fois la session échue.
       if (route === 'GET /api/moi') {
         const qui = lireSession(req);
         return json(res, 200, qui
-          ? { portail: true, nom: qui.nom, centralId: Number(qui.id), portailUrl: FAMIPORTAIL_URL }
+          ? { portail: true, nom: qui.nom, centralId: Number(qui.id), portailUrl: FAMIPORTAIL_URL,
+              resteMs: Math.max(0, qui.exp * 1000 - Date.now()) }
           : { portail: false });
       }
       if (route === 'GET /api/produit') return await apiProduit(req, res, url);

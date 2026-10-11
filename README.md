@@ -120,6 +120,39 @@ ou un id inconnus ; 503 sans `FAMIMINMAX_SECRET` ou si la base ne répond pas. J
 changement depuis Famicard vaut tout de suite, sans repasser par le portail. Base qui ne répond
 pas : pas admin. Le code `ADMIN_CODE` reste valable et ne passe pas par la table.
 
+### Accès décidé par Famicard (cocher / décocher)
+
+Quand Jimmy décoche Famiminmax sur une fiche Famicard, la personne ne passe plus, même sans
+repasser par le portail (contrat commun « Famicard dit qui a accès »). Famicard publie la liste de
+qui a l'accès ; Famiminmax la relit au démarrage puis **toutes les 60 s, en arrière-plan** (5 s au
+plus pour répondre), et chaque porte la consulte en mémoire :
+
+| Porte | Hors de la liste (mode appliquer) |
+|---|---|
+| `/entrer` (tuile du portail) | pas de session, retour à `/?acces=ferme` ; la liste est relue aussitôt (si l'accès vient d'être coché, l'essai suivant passe) |
+| session portail déjà ouverte (`/api/moi`, propositions) | plus reconnue : visite anonyme de la page scan, nom saisi sur l'appareil |
+| administration par le portail | refusée : il faut le rôle `admin` **et** être dans la liste |
+| page scan sans connexion (Zebra) | **inchangée, toujours ouverte** (décision de Jimmy : décocher retire la tuile, cela suffit) |
+| `ADMIN_CODE` | **le secours de Jimmy** : passe toujours, chaque usage est journalisé (`[accès] secours ADMIN_CODE : …`, jamais le code) |
+
+- Famicard injoignable, lent ou qui répond n'importe quoi : **la dernière liste connue reste**,
+  gardée en mémoire et dans la table `acces_famicard` (écrite quand la liste change) pour survivre
+  à un redémarrage pendant la panne. Si aucune liste n'a jamais été reçue : on laisse passer, et on
+  le journalise. Jamais de mise dehors générale.
+- Lecture : `GET <ACCES_FAMICARD_URL>?service=famiminmax&exp=…&sig=…`,
+  `sig = hex(HMAC-SHA256("acces|famiminmax|" + exp, FAMIMINMAX_SECRET))`.
+- Rapport : `GET /api/famicard/acces-rapport?exp=…&sig=…`,
+  `sig = hex(HMAC-SHA256("acces-rapport|" + exp, FAMIMINMAX_SECRET))` : mode, liste (reçue le,
+  total, source `famicard|memoire|base|aucune`, dernière erreur), refus depuis le démarrage par
+  (qui, porte) — en observer, ceux qui AURAIENT eu lieu —, usages du secours, et
+  `admins_hors_liste` (admins de `portail_roles` qui perdraient l'administration par le portail).
+  403 si la signature est fausse ou `exp` hors de [maintenant, +300 s], 503 sans `FAMIMINMAX_SECRET`.
+
+| Variable | Rôle |
+|---|---|
+| `ACCES_FAMICARD_MODE` | `observer` **par défaut** : rien n'est refusé de plus qu'avant, les refus qui auraient eu lieu sont notés (journal + rapport). `appliquer` : les refus sont réels (sans `ADMIN_CODE`, l'administration ne s'ouvre alors plus que par le portail). Une valeur inconnue = observer, avec un avertissement. |
+| `ACCES_FAMICARD_URL` | facultatif, défaut `https://famicard.famiformation.com/api_acces.php`. |
+
 `railway.json` ne règle que le contrôle de santé (`/api/sante`, qui ne touche pas la base) :
 une version qui ne démarre pas ne remplace jamais celle qui tourne.
 

@@ -512,6 +512,14 @@ if (new URLSearchParams(location.search).get('acces') === 'refuse') {
   toast('Lien du portail expiré : repassez par Famiportail.', true); // visible même sous la page nom
   try { history.replaceState(null, '', '/'); } catch { /* l'adresse garde ?acces=refuse, sans gravité */ }
 }
+// Entrée refusée par Famicard : l'accès n'est pas (ou plus) coché sur la fiche.
+// S'il vient de l'être, le serveur relit déjà la liste : un nouvel essai passe.
+// La page scan reste ouverte, avec le nom saisi sur l'appareil.
+if (new URLSearchParams(location.search).get('acces') === 'ferme') {
+  zone.innerHTML = '<p class="msg err">Votre accès à Famiminmax n’est pas ouvert dans Famicard. S’il vient de l’être, repassez par Famiportail dans un instant.</p>';
+  toast('Accès à Famiminmax non ouvert dans Famicard.', true); // visible même sous la page nom
+  try { history.replaceState(null, '', '/'); } catch { /* l'adresse garde ?acces=ferme, sans gravité */ }
+}
 
 function utilisateurActuel() {
   // Session portail échue (8 h) sur une page restée ouverte, comme sur un Zebra

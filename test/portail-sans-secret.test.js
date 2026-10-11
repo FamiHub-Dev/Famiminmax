@@ -14,7 +14,7 @@ delete process.env.FAMIMINMAX_SESSION_SECRET;
 process.env.FAMIMINMAX_ADMINS = '4';
 
 const db = require('../lib/db');
-const { serveur } = require('../server');
+const { serveur, acces } = require('../server');
 
 // Deuxième instance : le secret du portail posé, celui des sessions oublié.
 process.env.FAMIMINMAX_SECRET = 'secret-portail-de-test-0123456789abcdef';
@@ -96,4 +96,17 @@ test('sans FAMIMINMAX_SECRET : les rôles pour Famicard répondent 503 { ok: fal
   rep = await fetch(`${baseDemi}/api/famicard/roles?exp=${exp}&sig=${sig}`);
   assert.strictEqual(rep.status, 200);
   assert.deepStrictEqual((await rep.json()).comptes, {});
+});
+
+test('sans FAMIMINMAX_SECRET : le rapport d’accès répond 503 { ok: false }, et la liste n’est pas demandée à Famicard', async () => {
+  const exp = Math.floor(Date.now() / 1000) + 120;
+  const hmacVide = (m) => crypto.createHmac('sha256', '').update(m).digest('hex');
+  const rep = await fetch(`${base}/api/famicard/acces-rapport?exp=${exp}&sig=${hmacVide(`acces-rapport|${exp}`)}`);
+  assert.strictEqual(rep.status, 503);
+  assert.deepStrictEqual(await rep.json(), { ok: false, erreur: "Famiminmax n'est pas relié au portail : FAMIMINMAX_SECRET manque." });
+  // Rien à signer, donc rien n'est envoyé (l'adresse par défaut est le vrai Famicard)
+  await acces.rafraichir();
+  const { liste } = acces.rapport();
+  assert.strictEqual(liste.source, 'aucune');
+  assert.strictEqual(liste.erreur, 'FAMIMINMAX_SECRET manque : la liste n’est pas demandée');
 });

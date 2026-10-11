@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const db = require('./lib/db');
+const { creerAcces } = require('./lib/acces');
 const { parserMinimums, parserVentes, parserCollections, parserPhotos, candidatsScan } = require('./lib/parseurs');
 const { genererExportPropositions, genererExportCollections } = require('./lib/export');
 
@@ -71,17 +72,30 @@ function lireCorps(req, limite = MAX_UPLOAD) {
 }
 
 async function estAdmin(req, url) {
-  if (!ADMIN_CODE) return true; // pas de code configuré = accès libre (à éviter en prod)
-  const code = req.headers['x-admin-code'] || url.searchParams.get('code') || '';
-  if (code === ADMIN_CODE) return true;
+  if (ADMIN_CODE) {
+    // Le code est le SECOURS de Jimmy (voir « Accès, selon Famicard ») : il
+    // passe toujours, même en mode appliquer, et chaque usage est journalisé.
+    const code = req.headers['x-admin-code'] || url.searchParams.get('code') || '';
+    if (code === ADMIN_CODE) {
+      acces.noterSecours(req);
+      return true;
+    }
+  } else if (!acces.applique) {
+    // Pas de code configuré = accès libre (à éviter en prod). En mode
+    // appliquer, c'est Famicard qui décide : plus d'accès libre.
+    return true;
+  }
   // Ou une session ouverte par le portail, pour un id qui a le rôle « admin »
-  // dans portail_roles (voir « Rôles, pour Famicard »). Jamais depuis un autre
-  // site : /api/export est un GET qui change l'état, et le cookie (SameSite=Lax)
-  // suivrait un simple lien. Le code, lui, voyage en en-tête et n'a pas ce souci.
+  // dans portail_roles (voir « Rôles, pour Famicard ») ET qui est dans la liste
+  // de Famicard (porte « admin »). Jamais depuis un autre site : /api/export
+  // est un GET qui change l'état, et le cookie (SameSite=Lax) suivrait un
+  // simple lien. Le code, lui, voyage en en-tête et n'a pas ce souci.
   const site = req.headers['sec-fetch-site'];
   if (site && site !== 'same-origin' && site !== 'none') return false;
-  const qui = lireSession(req);
-  return !!qui && (await roleAdmin(qui.id));
+  // Le rôle AVANT la liste : seul un admin hors liste est un refus à noter,
+  // pas un collègue qui ouvre /admin par curiosité.
+  const qui = lireJetonSession(req);
+  return !!qui && (await roleAdmin(qui.id)) && acces.laissePasser(qui, 'admin');
 }
 
 // --- Porte du portail -------------------------------------------------------
@@ -128,12 +142,26 @@ function poseSession(req, res, qui) {
     (enHttps(req) ? '; Secure' : ''));
 }
 
-// Qui est arrivé par le portail, ou null : Zebra en libre-service, session
-// expirée ou cookie abîmé, c'est le comportement d'avant.
-function lireSession(req) {
+// Efface la session (« Changer d'utilisateur », entrée refusée) : mêmes
+// attributs qu'à la pose, sinon le navigateur garderait l'ancien cookie.
+const cookieEfface = (req) => 'fmm=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0' + (enHttps(req) ? '; Secure' : '');
+
+// Le cookie de session tel quel (signé, pas périmé), ou null : Zebra en
+// libre-service, session expirée ou cookie abîmé. Sans regarder la liste de
+// Famicard : estAdmin lit le rôle avant.
+function lireJetonSession(req) {
   const trouve = /(?:^|;\s*)fmm=([^;\s]+)/.exec(String(req.headers.cookie || ''));
   if (!trouve) return null;
   try { return ouvreJeton(decodeURIComponent(trouve[1]), SESSION_SECRET); } catch { return null; }
+}
+
+// Qui est arrivé par le portail ET figure dans la liste de Famicard (porte
+// « session », à chaque requête), ou null. Sorti de la liste en mode
+// appliquer, il redevient une visite anonyme de la page scan, comme un Zebra
+// en libre-service.
+function lireSession(req) {
+  const qui = lireJetonSession(req);
+  return qui && acces.laissePasser(qui, 'session') ? qui : null;
 }
 
 // Traçabilité : l'id Famicard de qui a signé (NULL pour un nom saisi sur un
@@ -274,6 +302,55 @@ async function amorcerRoles() {
   } catch (e) {
     console.error('[rôles] amorçage impossible :', motifErreur(e));
   }
+}
+
+// --- Accès, selon Famicard --------------------------------------------------
+// Demande de Jimmy : quand il décoche Famiminmax sur une fiche, la personne ne
+// passe plus, même sans repasser par le portail. Famicard publie la liste de
+// qui a l'accès (contrat « Famicard dit qui a accès ») ; lib/acces.js la relit
+// toutes les 60 s en arrière-plan et chaque porte la consulte en mémoire :
+// - « entrer » : /entrer, hors liste = pas de session ;
+// - « session » : chaque requête d'une session portail déjà ouverte, hors liste
+//   = visite anonyme de la page scan ;
+// - « admin » : l'administration par le portail = rôle admin ET dans la liste.
+// La PAGE SCAN reste ouverte sans connexion (décision de Jimmy : Zebra du
+// magasin) ; décocher retire la tuile, cela suffit pour elle. ADMIN_CODE est le
+// secours de Jimmy : il passe toujours, chaque usage est journalisé.
+//
+// Mode observer par défaut (rien de refusé, tout est noté), appliquer avec
+// ACCES_FAMICARD_MODE=appliquer. Signé avec FAMIMINMAX_SECRET, comme le
+// laissez-passer et les rôles : « acces|famiminmax|exp » vers Famicard,
+// « acces-rapport|exp » pour le rapport.
+
+const acces = creerAcces({
+  service: 'famiminmax',
+  url: process.env.ACCES_FAMICARD_URL || 'https://famicard.famiformation.com/api_acces.php',
+  mode: process.env.ACCES_FAMICARD_MODE,
+  signer: PORTAIL_SECRET ? (message) => signe(message, PORTAIL_SECRET) : null,
+  variableSecret: 'FAMIMINMAX_SECRET',
+  secours: 'ADMIN_CODE',
+});
+
+// GET /api/famicard/acces-rapport?exp=…&sig=… : le rapport du contrat, pour le
+// relire avec Jimmy avant de passer en appliquer. En plus : admins_hors_liste,
+// les admins de portail_roles absents de la liste, qui perdraient
+// l'administration par le portail en appliquer même s'ils ne sont pas venus
+// depuis le démarrage (null : pas de liste, ou base illisible).
+async function apiFamicardAccesRapport(req, res, url) {
+  if (!PORTAIL_SECRET) return json(res, 503, { ok: false, erreur: SANS_SECRET });
+  const exp = url.searchParams.get('exp') || '';
+  const refus = refusFamicard(`acces-rapport|${exp}`, exp, url.searchParams.get('sig') || '');
+  if (refus) return json(res, 403, { ok: false, erreur: refus });
+  let adminsHorsListe = null;
+  if (acces.connue()) {
+    try {
+      const { rows } = await db.requete("SELECT central_id, nom FROM portail_roles WHERE role = 'admin' ORDER BY central_id");
+      adminsHorsListe = rows.filter((l) => !acces.contient(l.central_id)).map((l) => ({ id: l.central_id, nom: l.nom || null }));
+    } catch (e) {
+      console.error('[accès] admins illisibles pour le rapport :', motifErreur(e));
+    }
+  }
+  json(res, 200, { ...acces.rapport(), admins_hors_liste: adminsHorsListe });
 }
 
 // Famille obligatoire sur les imports (« Noël », « Automne »…) : chaque fichier
@@ -845,6 +922,15 @@ const serveur = http.createServer(async (req, res) => {
         res.writeHead(302, { Location: '/?acces=refuse', 'Cache-Control': 'no-store' });
         return res.end();
       }
+      // Famicard dit qui entre (porte « entrer ») : hors de sa liste, pas de
+      // session, et celle qui traînerait sur l'appareil est effacée (sinon la
+      // page scan reprendrait le nom du précédent). La liste est relue tout de
+      // suite : si l'accès vient d'être coché, le prochain essai passe.
+      if (!acces.laissePasser(venu, 'entrer')) {
+        acces.relireBientot();
+        res.writeHead(302, { 'Set-Cookie': cookieEfface(req), Location: '/?acces=ferme', 'Cache-Control': 'no-store' });
+        return res.end();
+      }
       // Une fiche Famicard sans prénom ni nom bloquerait les propositions (nom
       // obligatoire) : on signe alors avec l'id.
       const nom = venu.nom.slice(0, 80) || `Famicard n° ${venu.id}`;
@@ -858,11 +944,7 @@ const serveur = http.createServer(async (req, res) => {
     // « Changer d'utilisateur » sur un Zebra partagé : la session portail se
     // ferme, la page scan revient à l'identification sur l'appareil.
     if (url.pathname === '/sortir') {
-      res.writeHead(302, {
-        'Set-Cookie': 'fmm=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0' + (enHttps(req) ? '; Secure' : ''),
-        Location: '/',
-        'Cache-Control': 'no-store',
-      });
+      res.writeHead(302, { 'Set-Cookie': cookieEfface(req), Location: '/', 'Cache-Control': 'no-store' });
       return res.end();
     }
 
@@ -912,6 +994,8 @@ const serveur = http.createServer(async (req, res) => {
       // Rôles, pour Famicard : signés avec FAMIMINMAX_SECRET, pas de code admin
       if (route === 'GET /api/famicard/roles') return await apiFamicardRoles(req, res, url);
       if (route === 'POST /api/famicard/role') return await apiFamicardRole(req, res);
+      // Accès, le rapport pour Famicard : même secret, message « acces-rapport| »
+      if (route === 'GET /api/famicard/acces-rapport') return await apiFamicardAccesRapport(req, res, url);
       return json(res, 404, { erreur: 'Route inconnue.' });
     }
 
@@ -931,9 +1015,16 @@ const serveur = http.createServer(async (req, res) => {
 async function demarrer() {
   await db.initSchema();
   await amorcerRoles(); // avant d'écouter : la première requête admin trouve la table prête
+  // Avant d'écouter aussi : la liste en base, puis celle de Famicard (5 s au
+  // plus, ne lève jamais), puis une relecture par minute en arrière-plan.
+  await acces.demarrer();
   serveur.listen(PORT, () => {
     console.log(`Famiminmax en écoute sur le port ${PORT}`);
-    if (!ADMIN_CODE) console.warn('⚠ ADMIN_CODE non défini : les pages admin sont accessibles sans code.');
+    if (!ADMIN_CODE) {
+      console.warn(acces.applique
+        ? '⚠ ADMIN_CODE non défini : pas de secours, l’administration ne s’ouvre que par le portail.'
+        : '⚠ ADMIN_CODE non défini : les pages admin sont accessibles sans code.');
+    }
     if (PORTAIL_SECRET && !SESSION_SECRET) console.warn('⚠ FAMIMINMAX_SESSION_SECRET manque : /entrer répond 503.');
     if (PORTAIL_SECRET && PORTAIL_SECRET === SESSION_SECRET) console.warn('⚠ FAMIMINMAX_SESSION_SECRET doit différer de FAMIMINMAX_SECRET.');
   });
@@ -946,4 +1037,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { serveur, demarrer, amorcerRoles };
+module.exports = { serveur, demarrer, amorcerRoles, acces };

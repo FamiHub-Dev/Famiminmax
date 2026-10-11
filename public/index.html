@@ -27,7 +27,10 @@
   header .sous{font-size:12px;color:#cfe6a0;font-weight:500}
   #chipUser{margin-left:auto;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
     background:#1a4a2c;color:#cfe6a0;border:1.5px solid var(--lichtgroen);border-radius:99px;padding:5px 12px}
-  #lienPortail{color:#cfe6a0;font-size:12.5px;font-weight:600;text-decoration:none;white-space:nowrap}
+  /* Place du bouton Famiportail commun (icône servie par le portail), au bout
+     de la barre. Vide sans session portail : elle ne prend alors aucune place. */
+  header [data-famiportail]{display:inline-flex;align-self:center;margin:-5px 0} /* -5 px : la barre garde presque sa hauteur */
+  header [data-famiportail]:empty{display:none}
   main{max-width:560px;margin:0 auto;padding:12px 12px 90px}
 
   /* Zone scan */
@@ -143,10 +146,10 @@
 </head>
 <body>
 <header>
-  <a id="lienPortail" href="https://famiportail.famiformation.com" hidden>← Famiportail</a>
   <h1>Famiminmax</h1>
   <span class="sous">Minimums rayon</span>
   <button type="button" id="chipUser" hidden>👤 —</button>
+  <span data-famiportail></span>
 </header>
 <main>
   <form class="scan" id="formScan" autocomplete="off">
@@ -491,10 +494,14 @@ async function chargerMoi() {
     if (!moi || !moi.portail || !moi.nom) return;
     identitePortail = moi.nom;
     finPortail = Date.now() + (Number(moi.resteMs) || 0);
-    const lien = document.getElementById('lienPortail');
-    if (moi.portailUrl) lien.href = moi.portailUrl;
-    lien.hidden = false;
-    document.querySelector('header .sous').hidden = true; // la place du lien sur l'écran du TC26
+    // Le bouton Famiportail commun (la même icône sur tous les services, en
+    // haut à droite) : chargé SEULEMENT ici, pour qui est arrivé par le
+    // portail. Un Zebra en libre-service ne le charge jamais, comme l'ancien
+    // lien « ← Famiportail » qu'il remplace.
+    const bouton = document.createElement('script');
+    bouton.src = 'https://famiportail.famiformation.com/assets/bouton-portail.js';
+    document.head.appendChild(bouton);
+    document.querySelector('header .sous').hidden = true; // la place du bouton sur l'écran du TC26
   } catch { /* réseau, ancien serveur : identification sur l'appareil, comme avant */ }
 }
 // Laissez-passer refusé par /entrer (périmé, ou lien rouvert depuis l'historique)

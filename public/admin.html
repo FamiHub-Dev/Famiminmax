@@ -9,6 +9,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<!-- Bouton Famiportail commun : la même icône sur tous les services, rangée
+     dans [data-famiportail] au bout de la barre. Ici pour tout le monde (PC de
+     l'acheteur) ; la page scan, elle, ne le charge qu'avec une session portail. -->
+<script src="https://famiportail.famiformation.com/assets/bouton-portail.js" defer></script>
 <style>
   :root{
     --donkergroen:#245D39;--lichtgroen:#80BA27;--lichtgroen-bg:#E6F0D7;
@@ -22,6 +26,9 @@
   header h1{font-size:20px;font-weight:800;letter-spacing:.03em;text-transform:uppercase;margin:0}
   header .sous{font-size:13px;color:#cfe6a0}
   header a{margin-left:auto;color:#cfe6a0;font-size:13px}
+  /* Place du bouton Famiportail commun (icône servie par le portail), au bout de la barre */
+  header [data-famiportail]{display:inline-flex;align-self:center;margin:-5px 0} /* -5 px : la barre garde presque sa hauteur */
+  @media (max-width:480px){header .sous{display:none}} /* téléphone : la place du bouton */
   main{max-width:1080px;margin:0 auto;padding:18px 16px 60px}
   h2{font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin:22px 0 10px}
   .cartes{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
@@ -72,10 +79,10 @@
 </head>
 <body>
 <header>
-  <a id="lienPortail" href="https://famiportail.famiformation.com" style="margin-left:0" hidden>← Famiportail</a>
   <h1>Famiminmax</h1>
   <span class="sous">Administration</span>
   <a href="/">→ page scan</a>
+  <span data-famiportail></span>
 </header>
 
 <div id="porte" style="display:none">
@@ -598,14 +605,6 @@ async function exporter(type, mode) {
 document.getElementById('btnExportMin').addEventListener('click', () => exporter('min', 'validees'));
 document.getElementById('btnExportColl').addEventListener('click', () => exporter('collection', 'validees'));
 document.getElementById('btnExportMinToutes').addEventListener('click', () => exporter('min', 'toutes'));
-
-// Arrivé par Famiportail : lien de retour (caché sinon, rien ne change).
-fetch('/api/moi').then((r) => r.json()).then((moi) => {
-  if (!moi || !moi.portail) return;
-  const lien = document.getElementById('lienPortail');
-  if (moi.portailUrl) lien.href = moi.portailUrl;
-  lien.hidden = false;
-}).catch(() => {});
 
 demarrer();
 </script>

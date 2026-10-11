@@ -84,15 +84,21 @@ La tuile du portail signe un laissez-passer d'une minute (`id|expiration|nom`, H
 même contrat que FamiTask et FamiPresta) et redirige vers `/entrer?j=…`. Famiminmax le vérifie
 et ouvre une session de 8 h (cookie `fmm`). Avec cette session : nom affiché sans saisie, il
 signe les propositions (`auteur` + `auteur_central_id`), bouton « Changer d'utilisateur »
-(`/sortir`), lien « ← Famiportail ». **Sans** session, rien ne change : page scan ouverte et nom
+(`/sortir`), bouton Famiportail. **Sans** session, rien ne change : page scan ouverte et nom
 saisi sur le Zebra, code admin.
+
+Le bouton Famiportail est le même sur tous les services : une icône au bout de la barre du haut,
+posée dans `<span data-famiportail>` par le script du portail
+(`https://famiportail.famiformation.com/assets/bouton-portail.js`, aucune copie ici). Page scan :
+chargé **seulement** avec une session portail, un Zebra en libre-service ne l'a jamais ; `/admin` :
+pour tout le monde.
 
 | Variable | Rôle |
 |---|---|
 | `FAMIMINMAX_SECRET` | secret partagé avec Famiportail (même valeur des deux côtés). Absent : `/entrer` répond 503. |
 | `FAMIMINMAX_SESSION_SECRET` | signe les cookies de session ; **différent** du précédent. Absent : `/entrer` répond 503. |
 | `FAMIMINMAX_ADMINS` | ids Famicard (séparés par des virgules) admis sur `/admin` sans code. `ADMIN_CODE` reste valable. |
-| `FAMIPORTAIL_URL` | facultatif, cible du lien de retour (défaut `https://famiportail.famiformation.com`). |
+| `FAMIPORTAIL_URL` | facultatif, adresse du portail rendue par `/api/moi` (`portailUrl`, défaut `https://famiportail.famiformation.com`). Le bouton Famiportail ne la lit pas : il mène toujours au portail. |
 
 `railway.json` ne règle que le contrôle de santé (`/api/sante`, qui ne touche pas la base) :
 une version qui ne démarre pas ne remplace jamais celle qui tourne.

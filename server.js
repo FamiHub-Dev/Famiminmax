@@ -22,8 +22,11 @@ const PORTAIL_SECRET = process.env.FAMIMINMAX_SECRET || '';
 const SESSION_SECRET = process.env.FAMIMINMAX_SESSION_SECRET || '';
 const SESSION_DUREE = 8 * 3600; // secondes, comme FamiPresta
 const FAMIPORTAIL_URL = (process.env.FAMIPORTAIL_URL || 'https://famiportail.famiformation.com').replace(/\/+$/, '');
-// Ids Famicard admis dans l'administration par le portail, sans le code (ex. « 4 »).
-const ADMINS_PORTAIL = new Set((process.env.FAMIMINMAX_ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean));
+// Ids Famicard (ex. « 4 ») qui AMORCENT la table des rôles quand elle est vide,
+// et rien d'autre : ensuite, c'est portail_roles qui dit qui administre (voir
+// « Rôles, pour Famicard »). Une entrée illisible est ignorée.
+const ADMINS_AMORCE = (process.env.FAMIMINMAX_ADMINS || '').split(',').map((s) => s.trim())
+  .filter((s) => /^\d{1,9}$/.test(s) && Number(s) > 0).map(Number);
 
 // Seuils des alertes de fiabilité (surchargeables par variables d'environnement).
 const SEUILS = {
@@ -67,18 +70,18 @@ function lireCorps(req, limite = MAX_UPLOAD) {
   });
 }
 
-function estAdmin(req, url) {
+async function estAdmin(req, url) {
   if (!ADMIN_CODE) return true; // pas de code configuré = accès libre (à éviter en prod)
   const code = req.headers['x-admin-code'] || url.searchParams.get('code') || '';
   if (code === ADMIN_CODE) return true;
-  // Ou une session ouverte par le portail, pour un id listé dans FAMIMINMAX_ADMINS.
-  // Jamais depuis un autre site : /api/export est un GET qui change l'état, et le
-  // cookie (SameSite=Lax) suivrait un simple lien. Le code, lui, voyage en
-  // en-tête et n'a pas ce souci.
+  // Ou une session ouverte par le portail, pour un id qui a le rôle « admin »
+  // dans portail_roles (voir « Rôles, pour Famicard »). Jamais depuis un autre
+  // site : /api/export est un GET qui change l'état, et le cookie (SameSite=Lax)
+  // suivrait un simple lien. Le code, lui, voyage en en-tête et n'a pas ce souci.
   const site = req.headers['sec-fetch-site'];
   if (site && site !== 'same-origin' && site !== 'none') return false;
   const qui = lireSession(req);
-  return !!qui && ADMINS_PORTAIL.has(qui.id);
+  return !!qui && (await roleAdmin(qui.id));
 }
 
 // --- Porte du portail -------------------------------------------------------
@@ -144,6 +147,132 @@ async function noterAuteurId(table, codeArticle, auteur, qui) {
       [qui ? qui.id : null, codeArticle, auteur]);
   } catch (e) {
     console.error(`[portail] auteur_central_id non noté (${table}) :`, e.message);
+  }
+}
+
+// --- Rôles, pour Famicard ---------------------------------------------------
+// La coche Famicard dit QUI entre par le portail ; le rôle dit ce qu'il fait
+// ICI, et il vit ici, dans portail_roles : Famicard le demande et le fait
+// changer depuis la fiche, il ne le recopie pas (contrat « rôles par service »,
+// le même pour tous les services du portail). Pas de ligne = « collegue », le
+// défaut. Le code partagé ADMIN_CODE reste une porte à part, qui ne passe pas
+// par ici.
+//
+// Même secret que le laissez-passer (FAMIMINMAX_SECRET), mais des messages
+// signés qui commencent par « roles| » et « role| » : une signature ne sert pas
+// à l'autre usage (le laissez-passer signe une charge base64url, sans « | »).
+
+const ROLES = [
+  { cle: 'collegue', libelle: 'Collègue — propose minimums et collections (scan)' },
+  { cle: 'admin', libelle: 'Administrateur — imports ERP, validation, exports' },
+];
+const ROLE_DEFAUT = 'collegue';
+const SANS_SECRET = "Famiminmax n'est pas relié au portail : FAMIMINMAX_SECRET manque.";
+// Motif d'une erreur pour les journaux : une connexion refusée vers un hôte à
+// plusieurs adresses lève une AggregateError au message VIDE (code ECONNREFUSED).
+const motifErreur = (e) => (e && (e.message || e.code)) || String(e);
+
+// Une demande de Famicard : exp (Unix) pas dépassé et au plus cinq minutes
+// d'avance, signature hex(HMAC-SHA256(message)). Rend le motif du refus, ou
+// null. Forme vérifiée AVANT timingSafeEqual : deux tampons de longueurs
+// différentes le feraient lever, et l'exception donnerait un 500.
+function refusFamicard(message, exp, sig) {
+  const maintenant = Math.floor(Date.now() / 1000);
+  if (!/^\d{1,12}$/.test(exp) || Number(exp) < maintenant || Number(exp) > maintenant + 300) return 'Demande expirée ou mal datée.';
+  if (typeof sig !== 'string' || !/^[0-9a-f]{64}$/.test(sig)) return 'Signature invalide.';
+  if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(signe(message, PORTAIL_SECRET), 'hex'))) return 'Signature invalide.';
+  return null;
+}
+
+// Un champ du corps tel que PHP l'a mis bout à bout pour signer : texte ou
+// nombre tels quels, absent ou null = '' (comme null . '' en PHP). Le reste
+// (objet, tableau, booléen) devient '' : la signature ou la forme le refusent.
+const champ = (v) => (typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
+
+// Le rôle « admin » d'un id Famicard, lu dans la table à CHAQUE requête (une
+// ligne par sa clé primaire, rien de notable) et jamais gardé en mémoire : une
+// rétrogradation depuis Famicard vaut tout de suite, sur toutes les instances.
+// Base qui bronche, id hors bornes : dans le doute, pas admin.
+async function roleAdmin(id) {
+  if (!/^\d{1,9}$/.test(String(id))) return false;
+  try {
+    const r = await db.requete("SELECT 1 FROM portail_roles WHERE central_id = $1 AND role = 'admin'", [Number(id)]);
+    return r.rows.length > 0;
+  } catch (e) {
+    console.error('[rôles] lecture impossible, pas admin :', motifErreur(e));
+    return false;
+  }
+}
+
+// GET /api/famicard/roles?exp=…&sig=… : les rôles du service et ceux déjà posés.
+async function apiFamicardRoles(req, res, url) {
+  if (!PORTAIL_SECRET) return json(res, 503, { ok: false, erreur: SANS_SECRET });
+  const exp = url.searchParams.get('exp') || '';
+  const refus = refusFamicard(`roles|${exp}`, exp, url.searchParams.get('sig') || '');
+  if (refus) return json(res, 403, { ok: false, erreur: refus });
+  let lignes;
+  try {
+    lignes = (await db.requete('SELECT central_id, role, nom FROM portail_roles ORDER BY central_id')).rows;
+  } catch (e) {
+    console.error('[rôles] liste illisible :', motifErreur(e));
+    return json(res, 503, { ok: false, erreur: 'Base indisponible : rôles illisibles.' });
+  }
+  // Pas de compte à part ici : la personne EST sa fiche Famicard. « compte » =
+  // le nom reçu avec le dernier rôle posé (l'id pour une ligne amorcée).
+  const comptes = {};
+  for (const l of lignes) comptes[l.central_id] = { role: l.role, compte: l.nom || `Famicard n° ${l.central_id}` };
+  json(res, 200, { contrat: 1, service: 'famiminmax', roles: ROLES, defaut: ROLE_DEFAUT, comptes });
+}
+
+// POST /api/famicard/role {centralId, role, nom, exp, sig} : pose le rôle, ou le
+// PRÉ-POSE pour qui n'est pas encore venu (sa première entrée par le portail
+// arrive avec le bon rôle). Idempotent. Un nom vide garde l'ancien.
+async function apiFamicardRole(req, res) {
+  if (!PORTAIL_SECRET) return json(res, 503, { ok: false, erreur: SANS_SECRET });
+  let b;
+  try {
+    b = JSON.parse((await lireCorps(req, 16 * 1024)).toString('utf8'));
+  } catch (e) {
+    return json(res, e.code === 413 ? 413 : 400, { ok: false, erreur: e.code === 413 ? 'Corps trop volumineux.' : 'Corps JSON invalide.' });
+  }
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return json(res, 400, { ok: false, erreur: 'Corps JSON invalide.' });
+  const centralId = champ(b.centralId);
+  const role = champ(b.role);
+  const nom = champ(b.nom);
+  const exp = champ(b.exp);
+  // La signature d'abord : sans elle, on ne dit rien de ce qui cloche dans la demande.
+  const refus = refusFamicard(`role|${centralId}|${role}|${nom}|${exp}`, exp, b.sig);
+  if (refus) return json(res, 403, { ok: false, erreur: refus });
+  if (!/^\d{1,9}$/.test(centralId) || Number(centralId) <= 0) return json(res, 400, { ok: false, erreur: 'centralId invalide.' });
+  if (!ROLES.some((r) => r.cle === role)) return json(res, 400, { ok: false, erreur: 'Rôle inconnu (collegue ou admin).' });
+  try {
+    await db.requete(
+      `INSERT INTO portail_roles (central_id, role, nom) VALUES ($1, $2, $3)
+       ON CONFLICT (central_id) DO UPDATE SET
+         role = EXCLUDED.role, nom = COALESCE(EXCLUDED.nom, portail_roles.nom), maj_le = now()`,
+      [Number(centralId), role, nom.trim().slice(0, 120) || null]
+    );
+  } catch (e) {
+    console.error('[rôles] rôle non posé :', motifErreur(e));
+    return json(res, 503, { ok: false, erreur: 'Base indisponible : rôle non modifié.' });
+  }
+  console.log(`[rôles] ${centralId} -> ${role} (depuis Famicard)`);
+  json(res, 200, { ok: true, role });
+}
+
+// Amorçage, au démarrage : tant que portail_roles est VIDE, les ids de
+// FAMIMINMAX_ADMINS y entrent « admin » (ce qu'ils avaient avant la table).
+// Dès qu'une ligne existe, la variable n'est plus lue : une rétrogradation
+// depuis Famicard tient après un redémarrage. Un échec est dit dans les
+// journaux et le service démarre quand même (ADMIN_CODE reste une porte).
+async function amorcerRoles() {
+  if (!ADMINS_AMORCE.length) return;
+  try {
+    if (await db.amorcerAdminsPortail(ADMINS_AMORCE)) {
+      console.log(`[rôles] portail_roles amorcée depuis FAMIMINMAX_ADMINS : ${ADMINS_AMORCE.join(', ')} en admin.`);
+    }
+  } catch (e) {
+    console.error('[rôles] amorçage impossible :', motifErreur(e));
   }
 }
 
@@ -720,7 +849,9 @@ const serveur = http.createServer(async (req, res) => {
       // obligatoire) : on signe alors avec l'id.
       const nom = venu.nom.slice(0, 80) || `Famicard n° ${venu.id}`;
       poseSession(req, res, { id: venu.id, nom });
-      const versAdmin = url.searchParams.get('vers') === 'admin' && ADMINS_PORTAIL.has(venu.id);
+      // Même règle que estAdmin : le rôle posé dans portail_roles (base qui
+      // bronche : la page scan, la session reste ouverte).
+      const versAdmin = url.searchParams.get('vers') === 'admin' && (await roleAdmin(venu.id));
       res.writeHead(302, { Location: versAdmin ? '/admin' : '/', 'Cache-Control': 'no-store' });
       return res.end();
     }
@@ -740,7 +871,7 @@ const serveur = http.createServer(async (req, res) => {
         '/api/import/minimums', '/api/import/ventes', '/api/import/collections',
         '/api/etat', '/api/export', '/api/scans-inconnus', '/api/scans-inconnus-vider',
         '/api/collegues-ajout', '/api/collegues-suppr', '/api/import/photos'];
-      if (ADMIN_ROUTES.includes(url.pathname) && !estAdmin(req, url)) {
+      if (ADMIN_ROUTES.includes(url.pathname) && !(await estAdmin(req, url))) {
         return json(res, 401, { erreur: 'Code d’accès admin invalide.' });
       }
       if (route === 'GET /api/sante') {
@@ -778,6 +909,9 @@ const serveur = http.createServer(async (req, res) => {
       if (route === 'GET /api/scans-inconnus') return await apiScansInconnus(req, res);
       if (route === 'POST /api/scans-inconnus-vider') return await apiScansVider(req, res);
       if (route === 'GET /api/export') return await apiExport(req, res, url);
+      // Rôles, pour Famicard : signés avec FAMIMINMAX_SECRET, pas de code admin
+      if (route === 'GET /api/famicard/roles') return await apiFamicardRoles(req, res, url);
+      if (route === 'POST /api/famicard/role') return await apiFamicardRole(req, res);
       return json(res, 404, { erreur: 'Route inconnue.' });
     }
 
@@ -796,6 +930,7 @@ const serveur = http.createServer(async (req, res) => {
 
 async function demarrer() {
   await db.initSchema();
+  await amorcerRoles(); // avant d'écouter : la première requête admin trouve la table prête
   serveur.listen(PORT, () => {
     console.log(`Famiminmax en écoute sur le port ${PORT}`);
     if (!ADMIN_CODE) console.warn('⚠ ADMIN_CODE non défini : les pages admin sont accessibles sans code.');
@@ -811,4 +946,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { serveur, demarrer };
+module.exports = { serveur, demarrer, amorcerRoles };

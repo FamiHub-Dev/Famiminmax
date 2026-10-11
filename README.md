@@ -97,8 +97,28 @@ pour tout le monde.
 |---|---|
 | `FAMIMINMAX_SECRET` | secret partagé avec Famiportail (même valeur des deux côtés). Absent : `/entrer` répond 503. |
 | `FAMIMINMAX_SESSION_SECRET` | signe les cookies de session ; **différent** du précédent. Absent : `/entrer` répond 503. |
-| `FAMIMINMAX_ADMINS` | ids Famicard (séparés par des virgules) admis sur `/admin` sans code. `ADMIN_CODE` reste valable. |
+| `FAMIMINMAX_ADMINS` | **amorçage seulement** : au démarrage, si la table `portail_roles` est vide, ces ids Famicard (séparés par des virgules) y entrent `admin`. Ensuite c'est la table qui fait foi (rôles changés depuis Famicard, voir ci-dessous) et la variable n'est plus lue. |
 | `FAMIPORTAIL_URL` | facultatif, adresse du portail rendue par `/api/moi` (`portailUrl`, défaut `https://famiportail.famiformation.com`). Le bouton Famiportail ne la lit pas : il mène toujours au portail. |
+
+### Rôles, modifiables depuis la fiche Famicard
+
+Qui entre par le portail a un rôle **ici**, rangé dans la table `portail_roles` (une ligne par id
+Famicard) : `collegue` (propose minimums et collections ; c'est le défaut, pas de ligne = collègue)
+ou `admin` (imports ERP, validation, exports). Famicard le lit et le change depuis la fiche
+(contrat « rôles par service », commun aux services du portail) ; il ne le recopie pas.
+
+- `GET /api/famicard/roles?exp=…&sig=…`, `sig = hex(HMAC-SHA256("roles|" + exp, FAMIMINMAX_SECRET))` :
+  rend `{contrat: 1, service, roles: [{cle, libelle}], defaut, comptes: {"<id>": {role, compte}}}`.
+- `POST /api/famicard/role` `{centralId, role, nom, exp, sig}`,
+  `sig = hex(HMAC-SHA256("role|" + centralId + "|" + role + "|" + nom + "|" + exp, FAMIMINMAX_SECRET))` :
+  pose le rôle, ou le pré-pose pour qui n'est pas encore venu. Rend `{ok: true, role}`.
+
+Refus 403 si la signature est fausse, ou si `exp` est dépassé ou à plus de 300 s ; 400 pour un rôle
+ou un id inconnus ; 503 sans `FAMIMINMAX_SECRET` ou si la base ne répond pas. Jamais de 500.
+
+`/admin` par le portail (et `/entrer?vers=admin`) suit cette table, relue à chaque requête : un
+changement depuis Famicard vaut tout de suite, sans repasser par le portail. Base qui ne répond
+pas : pas admin. Le code `ADMIN_CODE` reste valable et ne passe pas par la table.
 
 `railway.json` ne règle que le contrôle de santé (`/api/sante`, qui ne touche pas la base) :
 une version qui ne démarre pas ne remplace jamais celle qui tourne.

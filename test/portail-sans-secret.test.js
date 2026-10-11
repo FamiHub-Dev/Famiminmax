@@ -76,3 +76,24 @@ test('sans secret : aucun cookie n’ouvre de session, tout le reste comme avant
   assert.strictEqual(rows[0].auteur, 'Kim');
   assert.strictEqual(rows[0].auteur_central_id, null);
 });
+
+test('sans FAMIMINMAX_SECRET : les rôles pour Famicard répondent 503 { ok: false }, rien n’est écrit', async () => {
+  // Signé avec un secret VIDE : le HMAC se calcule, il ne doit rien ouvrir
+  const exp = Math.floor(Date.now() / 1000) + 120;
+  const hmacVide = (m) => crypto.createHmac('sha256', '').update(m).digest('hex');
+  let rep = await fetch(`${base}/api/famicard/roles?exp=${exp}&sig=${hmacVide(`roles|${exp}`)}`);
+  assert.strictEqual(rep.status, 503);
+  assert.deepStrictEqual(await rep.json(), { ok: false, erreur: "Famiminmax n'est pas relié au portail : FAMIMINMAX_SECRET manque." });
+  rep = await fetch(base + '/api/famicard/role', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ centralId: 4, role: 'admin', nom: 'Jimmy Hendrickx', exp, sig: hmacVide(`role|4|admin|Jimmy Hendrickx|${exp}`) }),
+  });
+  assert.strictEqual(rep.status, 503);
+  assert.strictEqual((await rep.json()).ok, false);
+  assert.deepStrictEqual((await db.requete('SELECT * FROM portail_roles')).rows, []);
+  // Le secret du portail suffit aux rôles, sans celui des sessions
+  const sig = crypto.createHmac('sha256', 'secret-portail-de-test-0123456789abcdef').update(`roles|${exp}`).digest('hex');
+  rep = await fetch(`${baseDemi}/api/famicard/roles?exp=${exp}&sig=${sig}`);
+  assert.strictEqual(rep.status, 200);
+  assert.deepStrictEqual((await rep.json()).comptes, {});
+});

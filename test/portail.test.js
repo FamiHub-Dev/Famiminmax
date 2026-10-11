@@ -25,7 +25,7 @@ process.env.FAMIMINMAX_ADMINS = '4, 12';
 process.env.FAMIPORTAIL_URL = 'https://portail.exemple.test/';
 
 const db = require('../lib/db');
-const { serveur } = require('../server');
+const { serveur, amorcerRoles } = require('../server');
 
 const PHP = process.env.PHP_BIN || 'C:/Users/enyls/php/php.exe';
 const PHP_OK = fs.existsSync(PHP);
@@ -91,6 +91,9 @@ before(async () => {
   // ne sait pas rejouer tout initSchema, d'où les deux lignes à la main)
   await db.requete('ALTER TABLE propositions ADD COLUMN IF NOT EXISTS auteur_central_id INTEGER');
   await db.requete('ALTER TABLE propositions_collection ADD COLUMN IF NOT EXISTS auteur_central_id INTEGER');
+  // Ce que fait demarrer() : la table des rôles, vide, reçoit FAMIMINMAX_ADMINS
+  // (4 et 12) en admin. Les tests d'administration ci-dessous passent par elle.
+  await amorcerRoles();
   await db.requete("INSERT INTO produits (code_article, ean, description, stock_min) VALUES ('57913', '5410764216374', 'Goudspray 150ml', 120)");
   await db.requete("INSERT INTO collections (nom) VALUES ('Lemax26-03')");
   await new Promise((ok) => serveur.listen(0, '127.0.0.1', ok));

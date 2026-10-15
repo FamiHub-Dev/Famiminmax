@@ -10,6 +10,7 @@ const db = require('./lib/db');
 const { creerAcces } = require('./lib/acces');
 const { parserMinimums, parserVentes, parserCollections, parserPhotos, candidatsScan } = require('./lib/parseurs');
 const { genererExportPropositions, genererExportCollections } = require('./lib/export');
+const { calculerMinMax } = require('./lib/minmax');
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_CODE = process.env.ADMIN_CODE || '';
@@ -636,25 +637,30 @@ async function apiPropositions(req, res) {
   const depots = (x) => (x.stock_depot || 0) + (x.stock_depot2 || 0) + (x.stock_fdcm || 0);
 
   const liste = [
-    ...mins.rows.map((x) => ({
-      type: 'min',
-      codeArticle: x.code_article,
-      famille: x.famille,
-      ean: x.ean,
-      description: x.description,
-      fournisseur: x.fournisseur,
-      photo: x.photo,
-      minActuel: x.min_actuel,
-      minPropose: x.min_propose,
-      commentaire: x.commentaire,
-      auteur: x.auteur,
-      majLe: x.maj_le,
-      statut: x.statut,
-      motifRefus: x.motif_refus,
-      ventesMoy: arrondi(parCode.get(x.code_article) || 0),
-      stockDepots: depots(x),
-      alertes: x.statut === 'a_traiter' || x.statut === 'validee' ? calculerAlertes(x, parCode.get(x.code_article)) : [],
-    })),
+    ...mins.rows.map((x) => {
+      const minMax = calculerMinMax(x.min_propose, x.vpe);
+      return {
+        type: 'min',
+        codeArticle: x.code_article,
+        famille: x.famille,
+        ean: x.ean,
+        description: x.description,
+        fournisseur: x.fournisseur,
+        photo: x.photo,
+        minActuel: x.min_actuel,
+        minPropose: x.min_propose,
+        minRayon: minMax.min,
+        maxRayon: minMax.max,
+        commentaire: x.commentaire,
+        auteur: x.auteur,
+        majLe: x.maj_le,
+        statut: x.statut,
+        motifRefus: x.motif_refus,
+        ventesMoy: arrondi(parCode.get(x.code_article) || 0),
+        stockDepots: depots(x),
+        alertes: x.statut === 'a_traiter' || x.statut === 'validee' ? calculerAlertes(x, parCode.get(x.code_article)) : [],
+      };
+    }),
     ...colls.rows.map((x) => ({
       type: 'collection',
       codeArticle: x.code_article,
@@ -851,7 +857,8 @@ async function apiExport(req, res, url) {
   const table = type === 'collection' ? 'propositions_collection' : 'propositions';
   const filtre = mode === 'validees' ? "WHERE pr.statut = 'validee'" : "WHERE pr.statut IN ('validee', 'traitee')";
   const r = await db.requete(
-    `SELECT pr.*, p.fournisseur, p.num_commande, p.vpe, p.stock_max, p.famille
+    `SELECT pr.*, p.fournisseur, p.num_commande, p.vpe, p.stock_max, p.famille,
+            p.stock_depot, p.stock_depot2, p.stock_fdcm
        FROM ${table} pr LEFT JOIN produits p ON p.code_article = pr.code_article
       ${filtre}
       ORDER BY pr.maj_le DESC`

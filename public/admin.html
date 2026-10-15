@@ -112,6 +112,7 @@
     <div class="det" style="margin:14px 0 4px">Les propositions sont <b>validées automatiquement</b>. Refusez celles qui posent problème (motif obligatoire, visible sur le Zebra du collègue) — les lignes en rouge signalent une incohérence probable. L'export sort toutes les validées et les passe « traitées ».</div>
 
     <h2>Minimums rayon</h2>
+    <div class="det" style="margin:0 0 8px">Min / Max = valeurs envoyées à l'ERP, calculées depuis la proposition : <b>Max = proposition</b>, <b>Min = proposition − VPE</b> (si ≤ 0 : Min = ½ VPE et Max = 1,5 VPE). Stock dépôts = FDepot + FDepot2 + FDCM, hors stock magasin.</div>
     <div class="ligne-form" style="margin-bottom:10px">
       <button class="btn" id="btnExportMin">⬇ Exporter les validés (format ERP)</button>
       <button class="btn secondaire" id="btnExportMinToutes">Ré-exporter l'historique</button>
@@ -416,7 +417,9 @@ function ligneProposition(p, actions, avecChiffres) {
   const puce = (detail) => detail ? ' <span class="alerte-cell" title="' + ech(detail) + '">⚠</span>' : '';
   const demandeAlerte = [a.variation, a.vpe].filter(Boolean).join(' · ');
   const chiffres = avecChiffres
-    ? '<td class="chiffre">' + (p.ventesMoy != null ? p.ventesMoy : '—') + puce(a.ventes) + '</td>' +
+    ? '<td class="chiffre">' + (p.minRayon != null ? p.minRayon : '—') + '</td>' +
+      '<td class="chiffre">' + (p.maxRayon != null ? p.maxRayon : '—') + '</td>' +
+      '<td class="chiffre">' + (p.ventesMoy != null ? p.ventesMoy : '—') + puce(a.ventes) + '</td>' +
       '<td class="chiffre">' + (p.stockDepots != null ? p.stockDepots : '—') + puce(a.depot) + '</td>'
     : '';
   const vignette = p.photo
@@ -445,7 +448,7 @@ function rendreSection(liste, cibleId, avecChiffres, videTexte) {
   const historique = liste.filter((p) => p.statut === 'refusee' || p.statut === 'traitee');
 
   const entete = '<table><thead><tr><th></th><th>Article</th><th>Description</th><th>Demande</th>' +
-    (avecChiffres ? '<th>Ventes moy./sem</th><th>Stock dépôts</th>' : '') +
+    (avecChiffres ? '<th>Min</th><th>Max</th><th>Ventes moy./sem</th><th>Stock dépôts</th>' : '') +
     '<th>Auteur</th><th>Quand</th><th>Statut</th><th></th></tr></thead><tbody>';
 
   let html = '';

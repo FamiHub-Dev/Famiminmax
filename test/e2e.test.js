@@ -204,6 +204,8 @@ test('proposition min : circuit complet avec alertes', async () => {
   assert.strictEqual(propositions.length, 1);
   assert.strictEqual(propositions[0].ventesMoy, 24); // (18 + 30) / 2 semaines
   assert.strictEqual(propositions[0].stockDepots, 4575); // 687 + 0 + 3888
+  assert.strictEqual(propositions[0].minRayon, 6); // 10 − VPE 12 ≤ 0 : ½ VPE
+  assert.strictEqual(propositions[0].maxRayon, 18); // 1,5 VPE
   assert.deepStrictEqual(propositions[0].alertes.map((a) => a.code).sort(),
     ['depot', 'variation', 'ventes', 'vpe']);
 
@@ -217,6 +219,8 @@ test('proposition min : circuit complet avec alertes', async () => {
   assert.strictEqual(propositions.length, 1);
   assert.strictEqual(propositions[0].minPropose, 108);
   assert.strictEqual(propositions[0].auteur, 'Kim');
+  assert.strictEqual(propositions[0].minRayon, 96); // 108 − VPE 12
+  assert.strictEqual(propositions[0].maxRayon, 108); // max = proposition
   assert.deepStrictEqual(propositions[0].alertes.map((a) => a.code), ['depot']);
 });
 
@@ -269,10 +273,14 @@ test('export ERP : la proposition validée d’office passe traitée', async () 
       'BestelNr.', 'afname', 'maximale voorraad', 'gereserveerde voorraad']);
   const ligne = ws.getRow(2);
   assert.strictEqual(ligne.getCell(1).value, '57913');
-  assert.strictEqual(ligne.getCell(2).value, 96);
+  assert.strictEqual(ligne.getCell(2).value, 84); // min = proposition 96 − VPE 12
   assert.strictEqual(ligne.getCell(4).value, 'Fami');
   assert.strictEqual(ligne.getCell(6).value, '022280');
   assert.strictEqual(ligne.getCell(7).value, 12);
+  assert.strictEqual(ligne.getCell(8).value, 96); // max = proposition
+  assert.strictEqual(ligne.getCell(10).value, 96); // Proposition (vue d'ensemble)
+  assert.strictEqual(ligne.getCell(13).value, 4575); // Stock dépôts : 687 + 0 + 3888
+  assert.strictEqual(ligne.getCell(17).value, 'Goodmark Europe NV'); // Fournisseur
 
   const f = await fiche('57913');
   assert.strictEqual(f.proposition.statut, 'traitee');
@@ -351,6 +359,16 @@ test('feuille Import tags : seulement les articles dont le tag change', async ()
   assert.strictEqual(wsTags.getRow(3).getCell(1).value, '33333');
   assert.strictEqual(wsTags.getRow(3).getCell(2).value, 'SugarCrush26');
   assert.ok(!wsTags.getRow(3).getCell(3).value); // aucun tag ne correspond : cellule vide
+});
+
+test('calcul min/max rayon depuis la proposition et le VPE', () => {
+  const { calculerMinMax } = require('../lib/minmax');
+  assert.deepStrictEqual(calculerMinMax(96, 12), { min: 84, max: 96 });
+  assert.deepStrictEqual(calculerMinMax(12, 12), { min: 6, max: 18 }); // proposition − VPE = 0
+  assert.deepStrictEqual(calculerMinMax(10, 12), { min: 6, max: 18 }); // proposition − VPE < 0
+  assert.deepStrictEqual(calculerMinMax(4, 5), { min: 3, max: 8 }); // ½ et 1,5 VPE arrondis au supérieur
+  assert.deepStrictEqual(calculerMinMax(10, null), { min: 9, max: 10 }); // VPE absent : traité comme 1
+  assert.deepStrictEqual(calculerMinMax(1, 1), { min: 1, max: 2 });
 });
 
 test('tag déduit de la collection (variantes réelles des exports ERP)', () => {

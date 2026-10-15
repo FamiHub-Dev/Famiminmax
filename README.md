@@ -61,6 +61,11 @@ automatiquement l'EAN-13 à zéro de tête.
    semaine pour les ventes).
 3. Passer en revue les propositions (refuser les douteuses), puis « Minimums validés
    (format ERP) » → fichier `adaptations-minimums-AAAA-MM-JJ.xlsx` → import dans l'ERP.
+   Les colonnes `minimale/maximale voorraad` portent le min/max calculés depuis la
+   proposition : **Max = proposition**, **Min = proposition − VPE** ; si la proposition
+   ne couvre pas un VPE (min ≤ 0) : Min = ½ VPE et Max = 1,5 VPE (arrondis au supérieur).
+   La proposition brute, le stock dépôts (FDepot + FDepot2 + FDCM, hors magasin) et le
+   fournisseur restent visibles dans les colonnes « vue d'ensemble ».
    Idem pour les collections : le fichier contient une feuille « vue d'ensemble »
    et deux feuilles prêtes à importer dans Beco — « Import collections » (n° article +
    collection) et « Import tags », limitée aux articles dont le tag change, avec le

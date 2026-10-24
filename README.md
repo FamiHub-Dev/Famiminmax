@@ -20,10 +20,13 @@ pour les repérer) et exporte les validées en Excel au format d'import ERP.
   par type : la dernière écrase la précédente et repart au début du circuit. Le collègue voit
   l'état de sa demande en rescannant (en attente / validée / traitée / refusée + motif).
   Article inactif sans stock dépôt = proposition de minimum désactivée.
-- **`/admin` — administration (PC)** : protégée par code d'accès, deux onglets. « Propositions
+- **`/admin` — administration (PC)** : protégée par code d'accès, trois onglets. « Propositions
   d'adaptation » : tableau avec **alertes de fiabilité**, action ✗ Refuser (motif obligatoire) —
   les propositions sont validées d'office. L'export ne sort que les **validées** et les passe
   « traitées » ; l'historique (refusées/traitées) reste consultable, avec revalidation possible.
+  « Sans minimum » : les références **actives** avec du **stock magasin** mais un **minimum
+  rayon à 0** (rien ne déclenche leur réassort) — comptes par famille, par thème de collection
+  (« SugarCrush26-06 » compte dans « SugarCrush26 »), et détail filtrable.
   « Imports & données » : les trois imports et le journal des scans non reconnus.
 
 ## Alertes de fiabilité (propositions de minimum)

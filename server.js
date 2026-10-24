@@ -849,6 +849,35 @@ async function apiEtat(req, res) {
   });
 }
 
+// Références actives SANS minimum rayon mais AVEC du stock magasin : l'ERP ne
+// déclenche aucun réassort pour elles, le rayon peut se vider sans signal.
+// Pour l'onglet « Sans minimum » de l'admin (collection et photo en plus).
+async function apiSansMinimum(req, res) {
+  const r = await db.requete(
+    `SELECT p.code_article, p.famille, p.ean, p.description, p.stock, p.vpe, p.fournisseur,
+            p.stock_depot, p.stock_depot2, p.stock_fdcm, ca.collection, ph.url AS photo
+       FROM produits p
+       LEFT JOIN collections_articles ca ON ca.code_article = p.code_article
+       LEFT JOIN photos_articles ph ON ph.code_article = p.code_article
+      WHERE p.actif = TRUE AND p.stock_min = 0 AND p.stock > 0
+      ORDER BY p.famille, p.code_article`
+  );
+  json(res, 200, {
+    refs: r.rows.map((x) => ({
+      codeArticle: x.code_article,
+      famille: x.famille,
+      ean: x.ean,
+      description: x.description,
+      stock: x.stock,
+      vpe: x.vpe,
+      fournisseur: x.fournisseur,
+      stockDepots: (x.stock_depot || 0) + (x.stock_depot2 || 0) + (x.stock_fdcm || 0),
+      collection: x.collection,
+      photo: x.photo,
+    })),
+  });
+}
+
 // Export Excel : seules les propositions VALIDÉES sortent (mode par défaut),
 // et passent alors « traitée ». mode=toutes re-télécharge validées + traitées.
 async function apiExport(req, res, url) {
@@ -958,7 +987,7 @@ const serveur = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) {
       const ADMIN_ROUTES = ['/api/propositions', '/api/proposition-suppr', '/api/proposition-decision',
         '/api/import/minimums', '/api/import/ventes', '/api/import/collections',
-        '/api/etat', '/api/export', '/api/scans-inconnus', '/api/scans-inconnus-vider',
+        '/api/etat', '/api/export', '/api/sans-minimum', '/api/scans-inconnus', '/api/scans-inconnus-vider',
         '/api/collegues-ajout', '/api/collegues-suppr', '/api/import/photos'];
       if (ADMIN_ROUTES.includes(url.pathname) && !(await estAdmin(req, url))) {
         return json(res, 401, { erreur: 'Code d’accès admin invalide.' });
@@ -995,6 +1024,7 @@ const serveur = http.createServer(async (req, res) => {
       if (route === 'POST /api/import/collections') return await apiImportCollections(req, res, url);
       if (route === 'POST /api/import/photos') return await apiImportPhotos(req, res);
       if (route === 'GET /api/etat') return await apiEtat(req, res);
+      if (route === 'GET /api/sans-minimum') return await apiSansMinimum(req, res);
       if (route === 'GET /api/scans-inconnus') return await apiScansInconnus(req, res);
       if (route === 'POST /api/scans-inconnus-vider') return await apiScansVider(req, res);
       if (route === 'GET /api/export') return await apiExport(req, res, url);

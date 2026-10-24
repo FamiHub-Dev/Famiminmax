@@ -120,6 +120,7 @@ after(() => serveur.close());
 
 test('les routes admin exigent le code', async () => {
   assert.strictEqual((await api('/api/etat')).status, 401);
+  assert.strictEqual((await api('/api/sans-minimum')).status, 401);
   assert.strictEqual((await api('/api/proposition-decision', { method: 'POST' })).status, 401);
 });
 
@@ -153,6 +154,17 @@ test('import du fichier collections', async () => {
   assert.strictEqual(data.nbCollections, 2);
   const { collections } = await (await api('/api/collections')).json();
   assert.deepStrictEqual(collections, ['Lemax26-03', 'SugarCrush26-06']);
+});
+
+test('références sans minimum avec du stock magasin (onglet admin)', async () => {
+  const { refs } = await (await api('/api/sans-minimum', { headers: ADMIN })).json();
+  // Seul 99001 est actif, sans minimum ET avec du stock magasin : 57913 et
+  // 99002 ont un minimum, 61702 et 99003 sont inactifs (99003 à stock nul).
+  assert.deepStrictEqual(refs.map((r) => r.codeArticle), ['99001']);
+  assert.strictEqual(refs[0].famille, 'Noël');
+  assert.strictEqual(refs[0].stock, 2);
+  assert.strictEqual(refs[0].collection, null); // pas de collection renseignée
+  assert.strictEqual(refs[0].stockDepots, 0);
 });
 
 test('scan par EAN : fiche produit + ventes + collection', async () => {

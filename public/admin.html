@@ -105,6 +105,7 @@
 
   <div class="onglets">
     <button type="button" id="ongletProp" class="onglet actif">Propositions d'adaptation</button>
+    <button type="button" id="ongletSansMin" class="onglet">Sans minimum</button>
     <button type="button" id="ongletImports" class="onglet">Imports &amp; données</button>
   </div>
 
@@ -126,6 +127,23 @@
       <span class="det" id="resExportColl"></span>
     </div>
     <div id="tablePropColl"></div>
+  </div>
+
+  <div id="vueSansMin" hidden>
+    <div class="det" style="margin:14px 0 10px">Références <b>actives</b> avec du <b>stock en magasin</b> mais un <b>minimum rayon à 0</b> dans l'ERP : rien ne déclenche leur réassort, le rayon peut se vider sans signal. Les chiffres viennent du dernier import des minimums.</div>
+    <div class="cartes" id="cartesSansMin"></div>
+
+    <h2>Par collection</h2>
+    <div class="det" style="margin:0 0 8px">Collections regroupées par thème (« SugarCrush26-06 » compte dans « SugarCrush26 »). « Hors collection » = références sans collection dans le dernier import.</div>
+    <div id="tableSansMinTheme"></div>
+
+    <h2>Détail des références</h2>
+    <div class="ligne-form" style="margin-bottom:10px">
+      <label>Famille <select id="sansMinFamille" class="sel-famille"><option value="">Toutes</option></select></label>
+      <input type="text" id="sansMinFiltre" placeholder="Filtrer : code, description, collection, fournisseur…" maxlength="60" style="font:inherit;font-size:13.5px;padding:8px;border-radius:9px;border:2px solid var(--bord);flex:1;min-width:220px" />
+      <span class="det" id="sansMinCompte"></span>
+    </div>
+    <div id="tableSansMin"></div>
   </div>
 
   <div id="vueImports" hidden>
@@ -222,6 +240,7 @@ async function demarrer() {
     document.getElementById('contenu').style.display = 'block';
     afficherEtat(await rep.json());
     chargerPropositions();
+    chargerSansMinimum();
     chargerScansInconnus();
     chargerCollegues();
   } catch {
@@ -238,17 +257,21 @@ document.getElementById('codeAdmin').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') document.getElementById('btnEntrer').click();
 });
 
-// Onglets Propositions / Imports (le dernier choisi est mémorisé)
+// Onglets Propositions / Sans minimum / Imports (le dernier choisi est mémorisé)
 function montrerOnglet(nom) {
   document.getElementById('vueProp').hidden = nom !== 'prop';
+  document.getElementById('vueSansMin').hidden = nom !== 'sansmin';
   document.getElementById('vueImports').hidden = nom !== 'imports';
   document.getElementById('ongletProp').classList.toggle('actif', nom === 'prop');
+  document.getElementById('ongletSansMin').classList.toggle('actif', nom === 'sansmin');
   document.getElementById('ongletImports').classList.toggle('actif', nom === 'imports');
   localStorage.setItem('famiminmax_onglet', nom);
 }
 document.getElementById('ongletProp').addEventListener('click', () => montrerOnglet('prop'));
+document.getElementById('ongletSansMin').addEventListener('click', () => montrerOnglet('sansmin'));
 document.getElementById('ongletImports').addEventListener('click', () => montrerOnglet('imports'));
-montrerOnglet(localStorage.getItem('famiminmax_onglet') === 'imports' ? 'imports' : 'prop');
+const ongletMemo = localStorage.getItem('famiminmax_onglet');
+montrerOnglet(['imports', 'sansmin'].includes(ongletMemo) ? ongletMemo : 'prop');
 
 function fdate(iso) {
   if (!iso) return '';
@@ -503,6 +526,87 @@ async function chargerPropositions() {
       demarrer();
     }));
 }
+
+// Onglet « Sans minimum » : références actives avec du stock magasin mais un
+// minimum rayon à 0. Les cartes comptent tout ; le choix de famille joue sur le
+// tableau par thème et le détail ; le filtre texte, sur le détail seulement.
+let refsSansMin = [];
+// Thème d'une collection : « SugarCrush26-06 » → « SugarCrush26 » (même esprit
+// que les tags de l'export ; sans numéro, la collection est son propre thème).
+const themeCollection = (c) => (c ? c.replace(/-(Podium|\d{2})$/, '') : 'Hors collection');
+
+function rendreSansMinimum() {
+  const famChoisie = document.getElementById('sansMinFamille').value;
+  const texte = document.getElementById('sansMinFiltre').value.trim().toLowerCase();
+
+  const parFamille = new Map();
+  refsSansMin.forEach((r) => {
+    const x = parFamille.get(r.famille) || { nb: 0, pieces: 0 };
+    x.nb++; x.pieces += r.stock || 0;
+    parFamille.set(r.famille, x);
+  });
+  document.getElementById('cartesSansMin').innerHTML = parFamille.size
+    ? [...parFamille.entries()].sort((a, b) => b[1].nb - a[1].nb).map(([fam, x]) =>
+        '<div class="carte"><b class="gros">' + x.nb.toLocaleString('fr-BE') + '</b>' + ech(fam) +
+        '<div class="det">' + x.pieces.toLocaleString('fr-BE') + ' pièces en magasin</div></div>').join('')
+    : '<p class="vide">Aucune référence active sans minimum avec du stock magasin. 👌</p>';
+
+  const selonFamille = refsSansMin.filter((r) => !famChoisie || r.famille === famChoisie);
+
+  const parTheme = new Map();
+  selonFamille.forEach((r) => {
+    const cle = r.famille + '|' + themeCollection(r.collection);
+    const x = parTheme.get(cle) || { nb: 0, pieces: 0 };
+    x.nb++; x.pieces += r.stock || 0;
+    parTheme.set(cle, x);
+  });
+  document.getElementById('tableSansMinTheme').innerHTML = parTheme.size
+    ? '<table><thead><tr><th>Famille</th><th>Collection (thème)</th><th>Références</th><th>Pièces en magasin</th></tr></thead><tbody>' +
+      [...parTheme.entries()].sort((a, b) => b[1].nb - a[1].nb).map(([cle, x]) => {
+        const [fam, theme] = cle.split('|');
+        return '<tr><td>' + ech(fam) + '</td><td>' + ech(theme) + '</td>' +
+          '<td class="chiffre">' + x.nb.toLocaleString('fr-BE') + '</td>' +
+          '<td class="chiffre">' + x.pieces.toLocaleString('fr-BE') + '</td></tr>';
+      }).join('') + '</tbody></table>'
+    : '<p class="vide">Rien pour cette famille.</p>';
+
+  const filtres = selonFamille.filter((r) =>
+    !texte || [r.codeArticle, r.ean, r.description, r.collection, r.fournisseur]
+      .some((v) => v && String(v).toLowerCase().includes(texte)));
+  document.getElementById('sansMinCompte').textContent = filtres.length.toLocaleString('fr-BE') + ' référence(s)';
+  document.getElementById('tableSansMin').innerHTML = filtres.length
+    ? '<table><thead><tr><th></th><th>Article</th><th>Description</th><th>Collection</th><th>Stock magasin</th><th>VPE</th><th>Stock dépôts</th></tr></thead><tbody>' +
+      filtres.map((r) => {
+        const vignette = r.photo
+          ? '<a href="' + ech(r.photo) + '" target="_blank" rel="noopener"><img class="vignette" loading="lazy" src="' + ech(r.photo) + '" onerror="this.parentNode.style.display=\'none\'" /></a>'
+          : '';
+        return '<tr><td>' + vignette + '</td>' +
+          '<td>' + ech(r.codeArticle) + '</td>' +
+          '<td>' + ech(r.description) +
+            ((r.famille || r.fournisseur) ? '<br><span style="font-size:11.5px;color:var(--ink-soft)">' +
+              [r.famille, r.fournisseur].filter(Boolean).map(ech).join(' · ') + '</span>' : '') + '</td>' +
+          '<td>' + ech(r.collection || '—') + '</td>' +
+          '<td class="chiffre">' + r.stock.toLocaleString('fr-BE') + '</td>' +
+          '<td class="chiffre">' + (r.vpe != null ? r.vpe : '—') + '</td>' +
+          '<td class="chiffre">' + (r.stockDepots != null ? r.stockDepots.toLocaleString('fr-BE') : '—') + '</td></tr>';
+      }).join('') + '</tbody></table>'
+    : '<p class="vide">Aucune référence ne correspond au filtre.</p>';
+}
+
+async function chargerSansMinimum() {
+  const rep = await appel('/api/sans-minimum');
+  ({ refs: refsSansMin } = await rep.json());
+  document.getElementById('ongletSansMin').textContent = 'Sans minimum (' + refsSansMin.length.toLocaleString('fr-BE') + ')';
+  const sel = document.getElementById('sansMinFamille');
+  const courante = sel.value;
+  const familles = [...new Set(refsSansMin.map((r) => r.famille))].sort((a, b) => a.localeCompare(b, 'fr'));
+  sel.innerHTML = '<option value="">Toutes</option>' +
+    familles.map((f) => '<option value="' + ech(f) + '">' + ech(f) + '</option>').join('');
+  if (familles.includes(courante)) sel.value = courante;
+  rendreSansMinimum();
+}
+document.getElementById('sansMinFamille').addEventListener('change', rendreSansMinimum);
+document.getElementById('sansMinFiltre').addEventListener('input', rendreSansMinimum);
 
 document.getElementById('btnImportPhotos').addEventListener('click', async (e) => {
   const data = await importer('fichierPhotos', '/api/import/photos', 'resPhotos', e.target);

@@ -43,7 +43,8 @@ pour les repérer) et exporte les validées en Excel au format d'import ERP.
 Chaque fichier ERP couvre **une famille** (Noël, Automne…) : la famille se choisit à l'import,
 et l'import ne remplace que les données de sa famille. Les familles cohabitent : le scan
 retrouve n'importe quel produit, la fiche affiche sa famille, et le sélecteur de collections
-ne propose que les collections de la famille du produit scanné.
+propose toutes les collections, familles confondues (des produits importés en Automne
+vivent dans des collections de Noël, ex. Fluffy-Pilou).
 
 ## Fichiers attendus
 

@@ -242,20 +242,18 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Collections proposables : filtrées par famille du produit scanné
-// (pas de collection Noël sur un produit d'automne). Cache par famille.
+// Collections proposables : toutes familles confondues — des produits importés
+// en Automne vivent dans des collections de Noël (ex. Fluffy-Pilou), un filtre
+// par famille les rendrait introuvables. Chargées une fois par page.
 let listeCollections = [];
-const cacheCollections = {};
-async function chargerCollections(famille) {
-  const cle = famille || '*';
-  if (cacheCollections[cle]) { listeCollections = cacheCollections[cle]; return; }
+async function chargerCollections() {
+  if (listeCollections.length) return;
   try {
-    const rep = await fetch('/api/collections' + (famille ? '?famille=' + encodeURIComponent(famille) : ''));
-    cacheCollections[cle] = (await rep.json()).collections || [];
+    const rep = await fetch('/api/collections');
+    listeCollections = (await rep.json()).collections || [];
   } catch {
-    cacheCollections[cle] = [];
+    listeCollections = [];
   }
-  listeCollections = cacheCollections[cle];
 }
 
 // Bannière d'état d'une demande : validée d'office, l'acheteur peut refuser.
@@ -276,7 +274,7 @@ async function chercher(code) {
     const data = await rep.json();
     if (!rep.ok) { zone.innerHTML = '<p class="msg err">' + ech(data.erreur) + '</p>'; refocus(); return; }
     if (data.choix) { afficherChoix(data.choix); refocus(); return; }
-    await chargerCollections(data.produit.famille);
+    await chargerCollections();
     afficherFiche(data);
     prolongerSession();
   } catch {

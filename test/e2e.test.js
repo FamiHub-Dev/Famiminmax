@@ -492,7 +492,7 @@ test('multi-familles : importer l’Automne ne touche pas Noël', async () => {
   assert.deepStrictEqual((await fiche('5400999000016')).ventes.map((v) => v.qteFami), [0, 9]);
   assert.deepStrictEqual((await fiche('5410764216374')).ventes.map((v) => v.qteFami), [18, 30]);
 
-  // Collections par famille : chaque produit ne voit que les collections de sa famille
+  // L'API garde son filtre famille optionnel (le sélecteur du scan, lui, charge tout)
   rep = await api('/api/import/collections?famille=' + F_AUT,
     { method: 'POST', headers: ADMIN, body: await fabriquerCollectionsAutomne() });
   assert.strictEqual(rep.status, 200);
